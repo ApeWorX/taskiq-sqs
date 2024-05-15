@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=64", "wheel", "setuptools_scm[toml]>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taskiq-sqs"
+description = "SQS Broker for TaskIQ"
+urls = {source = "https://github.com/ApeWorx/taskiq-sqs"}
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["taskiq", "broker", "aws", "sqs"]
+license = {file = "LICENSE"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "asyncer~=0.0.5",
+    "boto3~=1.34.34",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "black~=23.12.1",
+    "boto3-stubs[essential]~=1.34.84",
+    "build~=1.0.3",
+    "flake8~=7.0.0",
+    "isort~=5.13.2",
+    "mypy~=1.8.0",
+    "pytest~=7.4.4",
+    "requests~=2.31.0",
+    "setuptools-scm~=8.0.4",
+    "types-requests>=2.31.0.20240106",
+]
+
+[tool.mypy]
+exclude = "build/"
+
+[tool.setuptools_scm]
+write_to = "taskiq_sqs/_meta.py"
+
+# NOTE: you have to use single-quoted strings in TOML for regular expressions.
+# It's the equivalent of r-strings in Python.  Multiline strings are treated as
+# verbose regular expressions by Black.  Use [ ] to denote a significant space
+# character.
+
+[tool.black]
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+python_files = "test_*.py"
+testpaths = "tests"
+
+
+[tool.isort]
+force_grid_wrap = 0
+include_trailing_comma = true
+multi_line_output = 3
+use_parentheses = true
