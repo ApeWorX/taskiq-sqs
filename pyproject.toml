@@ -7,7 +7,7 @@ name = "taskiq-sqs"
 description = "SQS Broker for TaskIQ"
 urls = {source = "https://github.com/ApeWorx/taskiq-sqs"}
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 keywords = ["taskiq", "broker", "aws", "sqs"]
 license = {file = "LICENSE"}
 classifiers = [
