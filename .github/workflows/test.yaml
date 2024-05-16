@@ -9,6 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  AWS_REGION: us-east-1
+
 jobs:
     linting:
         runs-on: ubuntu-latest
