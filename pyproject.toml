@@ -48,7 +48,6 @@ dev = [
 exclude = "build/"
 
 [tool.setuptools_scm]
-write_to = "taskiq_sqs/_meta.py"
 
 # NOTE: you have to use single-quoted strings in TOML for regular expressions.
 # It's the equivalent of r-strings in Python.  Multiline strings are treated as
