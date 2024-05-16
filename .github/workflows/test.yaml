@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: "us-east-1"
 
 jobs:
     linting:
