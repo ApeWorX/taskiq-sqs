@@ -9,7 +9,6 @@ from typing import (
 )
 
 import boto3
-from ape.logging import logger
 from asyncer import asyncify
 from mypy_boto3_sqs.service_resource import Queue
 from taskiq import AsyncBroker
