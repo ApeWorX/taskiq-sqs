@@ -1,12 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import (
-    AsyncGenerator,
-    Callable,
-    Optional,
-    Union,
-)
+from typing import AsyncGenerator, Callable, Optional, Union
 
 import boto3
 from asyncer import asyncify
@@ -17,7 +12,10 @@ from taskiq.acks import AckableMessage
 from taskiq.message import BrokerMessage
 
 logger = logging.getLogger(__name__)
-stamp = lambda: int(datetime.now(tz=timezone.utc).timestamp())
+
+
+def stamp() -> int:
+    return int(datetime.now(tz=timezone.utc).timestamp())
 
 
 class SQSBroker(AsyncBroker):
@@ -38,7 +36,9 @@ class SQSBroker(AsyncBroker):
         queue_name = self.sqs_queue_url.split("/")[-1]
 
         if not self._sqs_queue:
-            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(QueueName=queue_name)
+            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(
+                QueueName=queue_name
+            )
 
             if not self._sqs_queue:
                 raise Exception("SQS Queue not found")
@@ -108,7 +108,9 @@ class SQSBroker(AsyncBroker):
                         if expiry := message.message_attributes.get("expiry"):
                             diff = stamp() - expiry
                             if diff > 0:
-                                logger.debug(f"Message expired {diff} seconds ago. Skipping.")
+                                logger.debug(
+                                    f"Message expired {diff} seconds ago. Skipping."
+                                )
                                 continue
                 except TypeError:
                     # Ignore weird expiries.  Not critical.
