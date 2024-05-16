@@ -1,15 +1,9 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import (
-    AsyncGenerator,
-    Callable,
-    Optional,
-    Union,
-)
+from typing import AsyncGenerator, Callable, Optional, Union
 
 import boto3
-from ape.logging import logger
 from asyncer import asyncify
 from mypy_boto3_sqs.service_resource import Queue
 from taskiq import AsyncBroker
@@ -18,7 +12,10 @@ from taskiq.acks import AckableMessage
 from taskiq.message import BrokerMessage
 
 logger = logging.getLogger(__name__)
-stamp = lambda: int(datetime.now(tz=timezone.utc).timestamp())
+
+
+def stamp() -> int:
+    return int(datetime.now(tz=timezone.utc).timestamp())
 
 
 class SQSBroker(AsyncBroker):
@@ -39,7 +36,9 @@ class SQSBroker(AsyncBroker):
         queue_name = self.sqs_queue_url.split("/")[-1]
 
         if not self._sqs_queue:
-            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(QueueName=queue_name)
+            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(
+                QueueName=queue_name
+            )
 
             if not self._sqs_queue:
                 raise Exception("SQS Queue not found")
@@ -63,18 +62,16 @@ class SQSBroker(AsyncBroker):
         """
         queue = await self._get_queue()
         # Must be explicitly set as a label to a unix timestamp
-        expiry = message.labels.pop("sqs_expiry", None)
-
-        # SQS structured message attributes
-        message_attributes = dict()
-        if expiry:
-            message_attributes["expiry"] = {
-                "StringValue": str(expiry),
-                "DataType": "Number",
-            }
+        expiry = message.labels.pop("sqs_expiry", 0)
 
         await asyncify(queue.send_message)(
-            MessageAttributes=message_attributes,
+            # SQS structured message attributes
+            MessageAttributes={
+                "expiry": {
+                    "StringValue": str(expiry),
+                    "DataType": "Number",
+                }
+            },
             MessageBody=message.message.decode("utf-8"),
             MessageGroupId=message.task_name,
         )
@@ -102,14 +99,20 @@ class SQSBroker(AsyncBroker):
         while True:
             last_had_message = False
 
-            for message in await asyncify(queue.receive_messages)():
+            for message in await asyncify(queue.receive_messages)(
+                MessageAttributeNames=[".*"]
+            ):
                 try:
                     if message.message_attributes:
                         # if expiry was set as a message attribute, respect it
-                        if expiry := message.message_attributes.get("expiry"):
-                            diff = stamp() - expiry
-                            if diff > 0:
-                                logger.debug(f"Message expired {diff} seconds ago. Skipping.")
+                        if expiry_typed := message.message_attributes.get("expiry"):
+                            expiry = int(expiry_typed.get("StringValue", 0))
+                            now = stamp()
+                            if 0 < expiry < now:
+                                logger.warn(
+                                    f"Message expired {now - expiry} seconds ago. Skipping."
+                                )
+                                await asyncify(message.delete)()
                                 continue
                 except TypeError:
                     # Ignore weird expiries.  Not critical.
