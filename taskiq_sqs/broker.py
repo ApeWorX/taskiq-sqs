@@ -9,6 +9,7 @@ from mypy_boto3_sqs.service_resource import Queue
 from taskiq import AsyncBroker
 from taskiq.abc.result_backend import AsyncResultBackend
 from taskiq.acks import AckableMessage
+from taskiq.exceptions import BrokerError
 from taskiq.message import BrokerMessage
 
 logger = logging.getLogger(__name__)
@@ -34,8 +35,11 @@ class SQSBroker(AsyncBroker):
         self._sqs = boto3.resource("sqs")
         self._sqs_queue: Optional[Queue] = None
 
-        self.wait_time_seconds = wait_time_seconds
-        self.max_number_of_messages = max_number_of_messages
+        if max_number_of_messages > 10:
+            raise BrokerError("MaxNumberOfMessages can be no greater than 10")
+
+        self.wait_time_seconds = max(wait_time_seconds, 0)
+        self.max_number_of_messages = max(max_number_of_messages, 1)
 
     async def _get_queue(self) -> Queue:
         queue_name = self.sqs_queue_url.split("/")[-1]
