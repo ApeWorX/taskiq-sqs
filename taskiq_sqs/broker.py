@@ -97,7 +97,7 @@ class SQSBroker(AsyncBroker):
 
         # TODO: Consider using AckableMessage and confirm with the queue to reduce lost messages
         while True:
-            last_had_message = False
+            no_backoff = False
 
             for message in await asyncify(queue.receive_messages)(
                 MessageAttributeNames=[".*"]
@@ -113,6 +113,7 @@ class SQSBroker(AsyncBroker):
                                     f"Message expired {now - expiry} seconds ago. Skipping."
                                 )
                                 await asyncify(message.delete)()
+                                no_backoff = True
                                 continue
                 except TypeError:
                     # Ignore weird expiries.  Not critical.
@@ -120,9 +121,9 @@ class SQSBroker(AsyncBroker):
 
                 yield message.body.encode("utf-8")
                 await asyncify(message.delete)()
-                last_had_message = True
+                no_backoff = True
 
-            sleepdur = 0.1 if last_had_message else 1
+            sleepdur = 0.01 if no_backoff else 1
             logger.debug(f"No messages on queue. Broker is sleeping for {sleepdur}s...")
             await asyncio.sleep(sleepdur)
-            last_had_message = False
+            no_backoff = False
