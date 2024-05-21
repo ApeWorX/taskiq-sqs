@@ -9,6 +9,7 @@ from mypy_boto3_sqs.service_resource import Queue
 from taskiq import AsyncBroker
 from taskiq.abc.result_backend import AsyncResultBackend
 from taskiq.acks import AckableMessage
+from taskiq.exceptions import BrokerError
 from taskiq.message import BrokerMessage
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ class SQSBroker(AsyncBroker):
     def __init__(
         self,
         sqs_queue_url: str,
+        wait_time_seconds: int = 0,  # Used for long polling
+        max_number_of_messages: int = 1,  # size of batch to receive from the queue
         result_backend: Optional[AsyncResultBackend] = None,
         task_id_generator: Optional[Callable[[], str]] = None,
     ) -> None:
@@ -31,6 +34,12 @@ class SQSBroker(AsyncBroker):
         self.sqs_queue_url = sqs_queue_url
         self._sqs = boto3.resource("sqs")
         self._sqs_queue: Optional[Queue] = None
+
+        if max_number_of_messages > 10:
+            raise BrokerError("MaxNumberOfMessages can be no greater than 10")
+
+        self.wait_time_seconds = max(wait_time_seconds, 0)
+        self.max_number_of_messages = max(max_number_of_messages, 1)
 
     async def _get_queue(self) -> Queue:
         queue_name = self.sqs_queue_url.split("/")[-1]
@@ -100,7 +109,13 @@ class SQSBroker(AsyncBroker):
             no_backoff = False
 
             for message in await asyncify(queue.receive_messages)(
-                MessageAttributeNames=[".*"]
+                MessageAttributeNames=[".*"],
+                # If there's competition on this queue (multiple processes of workers pulling from
+                # the same queue), and processing takes longer than the visibility timeout, multiple
+                # workers may end up processing the same message.
+                MaxNumberOfMessages=self.max_number_of_messages,
+                # Use long poling.
+                WaitTimeSeconds=self.wait_time_seconds,
             ):
                 try:
                     if message.message_attributes:
