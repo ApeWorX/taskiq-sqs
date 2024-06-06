@@ -31,6 +31,10 @@ class SQSBroker(AsyncBroker):
         task_id_generator: Optional[Callable[[], str]] = None,
     ) -> None:
         super().__init__(result_backend, task_id_generator)
+
+        if not sqs_queue_url or not sqs_queue_url.startswith("http"):
+            raise BrokerError("A valid SQS Queue URL is required")
+
         self.sqs_queue_url = sqs_queue_url
         self._sqs = boto3.resource("sqs")
         self._sqs_queue: Optional[Queue] = None
@@ -45,9 +49,7 @@ class SQSBroker(AsyncBroker):
         queue_name = self.sqs_queue_url.split("/")[-1]
 
         if not self._sqs_queue:
-            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(
-                QueueName=queue_name
-            )
+            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(QueueName=queue_name)
 
             if not self._sqs_queue:
                 raise Exception("SQS Queue not found")
