@@ -5,6 +5,7 @@ from typing import AsyncGenerator, Callable, Optional, Union
 
 import boto3
 from asyncer import asyncify
+from botocore.exceptions import ClientError
 from mypy_boto3_sqs.service_resource import Queue, SQSServiceResource
 from taskiq import AsyncBroker
 from taskiq.abc.result_backend import AsyncResultBackend
@@ -144,7 +145,19 @@ class SQSBroker(AsyncBroker):
                     pass
 
                 yield message.body.encode("utf-8")
-                await asyncify(message.delete)()
+
+                try:
+                    await asyncify(message.delete)()
+                except ClientError as err:
+                    if "receipt handle has expired" in str(err):
+                        # while not ideal, we shouldn't die on this
+                        logger.error(
+                            "Message receipt handle has expired. This could indicate duplicate"
+                            "processing or tasks being processed late."
+                        )
+                    else:
+                        raise err
+
                 no_backoff = True
 
             sleepdur = 0.01 if no_backoff else 1
