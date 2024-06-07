@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Callable, Optional, Union
 
 import boto3
 from asyncer import asyncify
-from mypy_boto3_sqs.service_resource import Queue, SQSClient
+from mypy_boto3_sqs.service_resource import Queue, SQSServiceResource
 from taskiq import AsyncBroker
 from taskiq.abc.result_backend import AsyncResultBackend
 from taskiq.acks import AckableMessage
@@ -36,7 +36,7 @@ class SQSBroker(AsyncBroker):
             raise BrokerError("A valid SQS Queue URL is required")
 
         self.sqs_queue_url = sqs_queue_url
-        self._sqs: SQSClient = boto3.resource("sqs")
+        self._sqs: SQSServiceResource = boto3.resource("sqs")
         self._sqs_queue: Optional[Queue] = None
 
         if max_number_of_messages > 10:
