@@ -49,7 +49,9 @@ class SQSBroker(AsyncBroker):
         queue_name = self.sqs_queue_url.split("/")[-1]
 
         if not self._sqs_queue:
-            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(QueueName=queue_name)
+            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(
+                QueueName=queue_name
+            )
 
             if not self._sqs_queue:
                 raise Exception("SQS Queue not found")
