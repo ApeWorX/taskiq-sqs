@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Callable, Optional, Union
 
 import boto3
 from asyncer import asyncify
-from mypy_boto3_sqs.service_resource import Queue
+from mypy_boto3_sqs.service_resource import Queue, SQSServiceResource
 from taskiq import AsyncBroker
 from taskiq.abc.result_backend import AsyncResultBackend
 from taskiq.acks import AckableMessage
@@ -36,7 +36,7 @@ class SQSBroker(AsyncBroker):
             raise BrokerError("A valid SQS Queue URL is required")
 
         self.sqs_queue_url = sqs_queue_url
-        self._sqs = boto3.resource("sqs")
+        self._sqs: SQSServiceResource = boto3.resource("sqs")
         self._sqs_queue: Optional[Queue] = None
 
         if max_number_of_messages > 10:
@@ -49,7 +49,9 @@ class SQSBroker(AsyncBroker):
         queue_name = self.sqs_queue_url.split("/")[-1]
 
         if not self._sqs_queue:
-            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(QueueName=queue_name)
+            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(
+                QueueName=queue_name
+            )
 
             if not self._sqs_queue:
                 raise Exception("SQS Queue not found")
@@ -75,17 +77,22 @@ class SQSBroker(AsyncBroker):
         # Must be explicitly set as a label to a unix timestamp
         expiry = message.labels.pop("sqs_expiry", 0)
 
-        await asyncify(queue.send_message)(
-            # SQS structured message attributes
-            MessageAttributes={
-                "expiry": {
-                    "StringValue": str(expiry),
-                    "DataType": "Number",
-                }
-            },
-            MessageBody=message.message.decode("utf-8"),
-            MessageGroupId=message.task_name,
-        )
+        try:
+            await asyncify(queue.send_message)(
+                # SQS structured message attributes
+                MessageAttributes={
+                    "expiry": {
+                        "StringValue": str(expiry),
+                        "DataType": "Number",
+                    }
+                },
+                MessageBody=message.message.decode("utf-8"),
+                MessageGroupId=message.task_name,
+            )
+        except Exception as err:
+            # taskiq supresses the original exception, but it wold be good to know about
+            logger.exception("Unhandled exception in SQSBroker")
+            raise err
 
     async def listen(self) -> AsyncGenerator[Union[bytes, AckableMessage], None]:
         """
