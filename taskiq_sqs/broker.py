@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, AsyncGenerator, Callable, Optional, Union
 import boto3
 from asyncer import asyncify
 from botocore.exceptions import ClientError
-from mypy_boto3_sqs.service_resource import Queue, SQSServiceResource
 from taskiq import AsyncBroker
 from taskiq.abc.result_backend import AsyncResultBackend
 from taskiq.acks import AckableMessage
@@ -14,7 +13,7 @@ from taskiq.exceptions import BrokerError
 from taskiq.message import BrokerMessage
 
 if TYPE_CHECKING:
-    from mypy_boto3_sqs.service_resource import Queue
+    from mypy_boto3_sqs.service_resource import Queue, SQSServiceResource
 
 logger = logging.getLogger(__name__)
 
