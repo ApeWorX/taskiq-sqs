@@ -1,4 +1,6 @@
-from __future__ import annotations # Needed for conditional type import support
+from __future__ import (
+    annotations,  # Needed for conditional type import support
+)
 
 import asyncio
 import logging
