@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, AsyncGenerator, Callable, Optional, Union
 
 import boto3
 from asyncer import asyncify
+from botocore.exceptions import ClientError
+from mypy_boto3_sqs.service_resource import Queue, SQSServiceResource
 from taskiq import AsyncBroker
 from taskiq.abc.result_backend import AsyncResultBackend
 from taskiq.acks import AckableMessage
@@ -33,8 +35,12 @@ class SQSBroker(AsyncBroker):
         task_id_generator: Optional[Callable[[], str]] = None,
     ) -> None:
         super().__init__(result_backend, task_id_generator)
+
+        if not sqs_queue_url or not sqs_queue_url.startswith("http"):
+            raise BrokerError("A valid SQS Queue URL is required")
+
         self.sqs_queue_url = sqs_queue_url
-        self._sqs = boto3.resource("sqs")
+        self._sqs: SQSServiceResource = boto3.resource("sqs")
         self._sqs_queue: Optional[Queue] = None
 
         if max_number_of_messages > 10:
@@ -75,17 +81,22 @@ class SQSBroker(AsyncBroker):
         # Must be explicitly set as a label to a unix timestamp
         expiry = message.labels.pop("sqs_expiry", 0)
 
-        await asyncify(queue.send_message)(
-            # SQS structured message attributes
-            MessageAttributes={
-                "expiry": {
-                    "StringValue": str(expiry),
-                    "DataType": "Number",
-                }
-            },
-            MessageBody=message.message.decode("utf-8"),
-            MessageGroupId=message.task_name,
-        )
+        try:
+            await asyncify(queue.send_message)(
+                # SQS structured message attributes
+                MessageAttributes={
+                    "expiry": {
+                        "StringValue": str(expiry),
+                        "DataType": "Number",
+                    }
+                },
+                MessageBody=message.message.decode("utf-8"),
+                MessageGroupId=message.task_name,
+            )
+        except Exception as err:
+            # taskiq supresses the original exception, but it wold be good to know about
+            logger.exception("Unhandled exception in SQSBroker")
+            raise err
 
     async def listen(self) -> AsyncGenerator[Union[bytes, AckableMessage], None]:
         """
@@ -137,7 +148,19 @@ class SQSBroker(AsyncBroker):
                     pass
 
                 yield message.body.encode("utf-8")
-                await asyncify(message.delete)()
+
+                try:
+                    await asyncify(message.delete)()
+                except ClientError as err:
+                    if "receipt handle has expired" in str(err):
+                        # while not ideal, we shouldn't die on this
+                        logger.error(
+                            "Message receipt handle has expired. This could indicate duplicate"
+                            "processing or tasks being processed late."
+                        )
+                    else:
+                        raise err
+
                 no_backoff = True
 
             sleepdur = 0.01 if no_backoff else 1
