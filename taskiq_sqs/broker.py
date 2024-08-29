@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, AsyncGenerator, Callable, Optional, Union
 
 import boto3
 from asyncer import asyncify
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from taskiq import AsyncBroker
 from taskiq.abc.result_backend import AsyncResultBackend
@@ -37,6 +38,7 @@ class SQSBroker(AsyncBroker):
         result_backend: Optional[AsyncResultBackend] = None,
         task_id_generator: Optional[Callable[[], str]] = None,
         sqs_region_override: str | None = None,
+        sqs_credentials_source_override: str | None = None,
     ) -> None:
         super().__init__(result_backend, task_id_generator)
 
@@ -45,7 +47,10 @@ class SQSBroker(AsyncBroker):
 
         self.sqs_queue_url = sqs_queue_url
         self._sqs: SQSServiceResource = boto3.resource(
-            "sqs", region_name=sqs_region_override
+            "sqs",
+            config=Config(
+                region_name=sqs_region_override, credential_source=sqs_credentials_source_override
+            ),
         )
         self._sqs_queue: Optional[Queue] = None
 
@@ -59,9 +64,7 @@ class SQSBroker(AsyncBroker):
         queue_name = self.sqs_queue_url.split("/")[-1]
 
         if not self._sqs_queue:
-            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(
-                QueueName=queue_name
-            )
+            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(QueueName=queue_name)
 
             if not self._sqs_queue:
                 raise Exception("SQS Queue not found")
