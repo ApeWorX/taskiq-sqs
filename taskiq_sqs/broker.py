@@ -36,6 +36,7 @@ class SQSBroker(AsyncBroker):
         max_number_of_messages: int = 1,  # size of batch to receive from the queue
         result_backend: Optional[AsyncResultBackend] = None,
         task_id_generator: Optional[Callable[[], str]] = None,
+        sqs_region_override: str | None = None,
     ) -> None:
         super().__init__(result_backend, task_id_generator)
 
@@ -43,7 +44,9 @@ class SQSBroker(AsyncBroker):
             raise BrokerError("A valid SQS Queue URL is required")
 
         self.sqs_queue_url = sqs_queue_url
-        self._sqs: SQSServiceResource = boto3.resource("sqs")
+        self._sqs: SQSServiceResource = boto3.resource(
+            "sqs", region_name=sqs_region_override
+        )
         self._sqs_queue: Optional[Queue] = None
 
         if max_number_of_messages > 10:
