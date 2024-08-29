@@ -16,6 +16,8 @@ from taskiq.acks import AckableMessage
 from taskiq.exceptions import BrokerError
 from taskiq.message import BrokerMessage
 
+from taskiq_sqs.aws import get_container_credentials
+
 if TYPE_CHECKING:
     from mypy_boto3_sqs.service_resource import Queue, SQSServiceResource
 
@@ -37,15 +39,28 @@ class SQSBroker(AsyncBroker):
         result_backend: Optional[AsyncResultBackend] = None,
         task_id_generator: Optional[Callable[[], str]] = None,
         sqs_region_override: str | None = None,
+        force_ecs_container_credentials=False,
     ) -> None:
         super().__init__(result_backend, task_id_generator)
 
         if not sqs_queue_url or not sqs_queue_url.startswith("http"):
             raise BrokerError("A valid SQS Queue URL is required")
 
+        creds = dict()
+        # NOTE: This bypasses the normal order of operations for boto3 auth and
+        #       goes straight to using the ECS role creds from the metadata
+        #       service. This can be useful in edge cases where there are higher
+        #       priority credentials you do not want to use for this service.
+        if force_ecs_container_credentials:
+            creds = get_container_credentials()
+
         self.sqs_queue_url = sqs_queue_url
         self._sqs: SQSServiceResource = boto3.resource(
-            "sqs", region_name=sqs_region_override
+            "sqs",
+            region_name=sqs_region_override,
+            aws_access_key_id=creds.get("AccessKeyId"),
+            aws_secret_access_key=creds.get("SecretAccessKey"),
+            aws_session_token=creds.get("Token"),
         )
         self._sqs_queue: Optional[Queue] = None
 
