@@ -4,6 +4,7 @@ from __future__ import (
 
 import asyncio
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, Callable, Optional, Union
 
@@ -19,6 +20,8 @@ from taskiq.message import BrokerMessage
 from taskiq_sqs.aws import get_container_credentials
 
 if TYPE_CHECKING:
+    from typing import Mapping
+
     from mypy_boto3_sqs.service_resource import Queue, SQSServiceResource
 
 logger = logging.getLogger(__name__)
@@ -46,22 +49,14 @@ class SQSBroker(AsyncBroker):
         if not sqs_queue_url or not sqs_queue_url.startswith("http"):
             raise BrokerError("A valid SQS Queue URL is required")
 
-        creds = dict()
         # NOTE: This bypasses the normal order of operations for boto3 auth and
         #       goes straight to using the ECS role creds from the metadata
         #       service. This can be useful in edge cases where there are higher
         #       priority credentials you do not want to use for this service.
-        if force_ecs_container_credentials:
-            creds = get_container_credentials()
-
+        self.force_ecs_container_credentials = force_ecs_container_credentials
+        self.sqs_region_override = sqs_region_override
         self.sqs_queue_url = sqs_queue_url
-        self._sqs: SQSServiceResource = boto3.resource(
-            "sqs",
-            region_name=sqs_region_override,
-            aws_access_key_id=creds.get("AccessKeyId"),
-            aws_secret_access_key=creds.get("SecretAccessKey"),
-            aws_session_token=creds.get("Token"),
-        )
+        self._sqs: SQSServiceResource | None = None
         self._sqs_queue: Optional[Queue] = None
 
         if max_number_of_messages > 10:
@@ -70,16 +65,43 @@ class SQSBroker(AsyncBroker):
         self.wait_time_seconds = max(wait_time_seconds, 0)
         self.max_number_of_messages = max(max_number_of_messages, 1)
 
+    @property
+    def _sqs_credentials_expired(self):
+        return self._creds_expiration and self._creds_expiration < datetime.now(
+            tz=timezone.utc
+        )
+
+    async def _sqs_client(self) -> SQSServiceResource:
+        if self._sqs and not self._sqs_credentials_expired:
+            return self._sqs
+
+        creds: Mapping[str, str] = defaultdict(None)
+
+        if self.force_ecs_container_credentials:
+            creds = await get_container_credentials()
+            # NOTE: This is probably not an optional prop in the response
+            if creds.get("Expiration"):
+                self._creds_expiration = datetime.fromisoformat(creds["Expiration"])
+
+        return boto3.resource(
+            "sqs",
+            region_name=self.sqs_region_override,
+            aws_access_key_id=creds.get("AccessKeyId"),
+            aws_secret_access_key=creds.get("SecretAccessKey"),
+            aws_session_token=creds.get("Token"),
+        )
+
     async def _get_queue(self) -> Queue:
-        queue_name = self.sqs_queue_url.split("/")[-1]
+        if self._sqs_queue and not self._sqs_credentials_expired:
+            return self._sqs_queue
+
+        sqs = await self._sqs_client()
+        self._sqs_queue = await asyncify(sqs.get_queue_by_name)(
+            QueueName=self.sqs_queue_url.split("/")[-1]
+        )
 
         if not self._sqs_queue:
-            self._sqs_queue = await asyncify(self._sqs.get_queue_by_name)(
-                QueueName=queue_name
-            )
-
-            if not self._sqs_queue:
-                raise Exception("SQS Queue not found")
+            raise Exception("SQS Queue not found")
 
         return self._sqs_queue
 
@@ -136,53 +158,60 @@ class SQSBroker(AsyncBroker):
         :return: nothing.
         """
 
-        queue = await self._get_queue()
-
         # TODO: Consider using AckableMessage and confirm with the queue to reduce lost messages
         while True:
             no_backoff = False
+            queue = await self._get_queue()
 
-            for message in await asyncify(queue.receive_messages)(
-                MessageAttributeNames=[".*"],
-                # If there's competition on this queue (multiple processes of workers pulling from
-                # the same queue), and processing takes longer than the visibility timeout, multiple
-                # workers may end up processing the same message.
-                MaxNumberOfMessages=self.max_number_of_messages,
-                # Use long poling.
-                WaitTimeSeconds=self.wait_time_seconds,
-            ):
-                try:
-                    if message.message_attributes:
-                        # if expiry was set as a message attribute, respect it
-                        if expiry_typed := message.message_attributes.get("expiry"):
-                            expiry = int(expiry_typed.get("StringValue", 0))
-                            now = stamp()
-                            if 0 < expiry < now:
-                                logger.warn(
-                                    f"Message expired {now - expiry} seconds ago. Skipping."
-                                )
-                                await asyncify(message.delete)()
-                                no_backoff = True
-                                continue
-                except TypeError:
-                    # Ignore weird expiries.  Not critical.
-                    pass
+            try:
+                for message in await asyncify(queue.receive_messages)(
+                    MessageAttributeNames=[".*"],
+                    # If there's competition on this queue (multiple processes of workers pulling
+                    # from the same queue), and processing takes longer than the visibility timeout,
+                    # multiple workers may end up processing the same message.
+                    MaxNumberOfMessages=self.max_number_of_messages,
+                    # Use long poling.
+                    WaitTimeSeconds=self.wait_time_seconds,
+                ):
+                    try:
+                        if message.message_attributes:
+                            # if expiry was set as a message attribute, respect it
+                            if expiry_typed := message.message_attributes.get("expiry"):
+                                expiry = int(expiry_typed.get("StringValue", 0))
+                                now = stamp()
+                                if 0 < expiry < now:
+                                    logger.warn(
+                                        f"Message expired {now - expiry} seconds ago. Skipping."
+                                    )
+                                    await asyncify(message.delete)()
+                                    no_backoff = True
+                                    continue
+                    except TypeError:
+                        # Ignore weird expiries.  Not critical.
+                        pass
 
-                yield message.body.encode("utf-8")
+                    yield message.body.encode("utf-8")
 
-                try:
-                    await asyncify(message.delete)()
-                except ClientError as err:
-                    if "receipt handle has expired" in str(err):
-                        # while not ideal, we shouldn't die on this
-                        logger.error(
-                            "Message receipt handle has expired. This could indicate duplicate"
-                            "processing or tasks being processed late."
-                        )
-                    else:
-                        raise err
+                    try:
+                        await asyncify(message.delete)()
+                    except ClientError as err:
+                        if "receipt handle has expired" in str(err):
+                            # while not ideal, we shouldn't die on this
+                            logger.error(
+                                "Message receipt handle has expired. This could indicate duplicate"
+                                "processing or tasks being processed late."
+                            )
+                        else:
+                            raise err
 
-                no_backoff = True
+                    no_backoff = True
+            except ClientError as err:
+                # Creds will get refreshed when _get_queue() is called again
+                if "ExpiredToken" in str(err):
+                    logger.warning("ECS credentials expired.")
+                    continue
+                else:
+                    raise err
 
             sleepdur = 0.01 if no_backoff else 1
             logger.debug(f"No messages on queue. Broker is sleeping for {sleepdur}s...")
