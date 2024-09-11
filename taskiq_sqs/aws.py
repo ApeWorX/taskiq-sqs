@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 
@@ -10,7 +11,7 @@ class InvalidEnvironment(Exception):
     pass
 
 
-def get_container_credentials():
+async def get_container_credentials() -> dict[str, str]:
     """Fetches the ECS task role credentials provided by the metadata service"""
     if not (relative_uri := os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")):
         raise InvalidEnvironment(
@@ -18,5 +19,7 @@ def get_container_credentials():
         )
 
     http = urllib3.PoolManager()
-    resp = http.request("GET", f"{ECS_CONTAINER_METADATA_URI}{relative_uri}")
+    resp = await asyncio.to_thread(
+        http.request, "GET", f"{ECS_CONTAINER_METADATA_URI}{relative_uri}"
+    )
     return json.loads(resp.data)

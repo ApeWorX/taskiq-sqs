@@ -7,5 +7,6 @@ def test_init():
         broker.sqs_queue_url
         == "https://sqs.us-west-2.amazonaws.com/123456789012/queue-name"
     )
-    assert broker._sqs is not None
+    assert broker.force_ecs_container_credentials is False
+    assert broker.sqs_region_override is None
     assert broker._sqs_queue is None
