@@ -38,6 +38,7 @@ dependencies = [
 "Source" = "https://github.com/taskiq-python/taskiq-sqs"
 "Bug Tracker" = "https://github.com/taskiq-python/taskiq-sqs/issues"
 "Repository" = "https://github.com/taskiq-python/taskiq-sqs/"
+"Documentation" = "https://taskiq-python.github.io/taskiq-sqs/"
 
 [dependency-groups]
 dev = [
@@ -142,6 +143,11 @@ ignore = [
     "PLR2004",  # magic values
 ]
 "examples/*" = [
+    "T201",  # print
+    "D",
+    "INP001",
+]
+"docs/examples/*" = [
     "T201",  # print
     "D",
     "INP001",

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://taskiq-python.github.io/taskiq-sqs/sitemap.xml
