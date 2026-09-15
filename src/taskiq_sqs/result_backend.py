@@ -1,7 +1,7 @@
-from typing import TYPE_CHECKING, Any, TypeVar
+import contextlib
+from typing import Any, TypeVar
 
-from aiobotocore.session import get_session
-from botocore.exceptions import ClientError
+import capo_s3
 from taskiq import AsyncResultBackend
 from taskiq.abc.serializer import TaskiqSerializer
 from taskiq.compat import model_dump, model_validate
@@ -11,9 +11,6 @@ from taskiq.serializers import JSONSerializer
 from taskiq_sqs import constants, exceptions
 from taskiq_sqs.types import S3Bucket
 
-
-if TYPE_CHECKING:
-    from types_aiobotocore_s3.client import S3Client
 
 _ReturnType = TypeVar("_ReturnType")
 
@@ -48,60 +45,56 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
         self._aws_secret_access_key = aws_secret_access_key
         self._bucket = bucket
         self._base_path = base_path
-        self._session = get_session()
         self._serializer = serializer or JSONSerializer()
 
-    async def _get_client(self) -> "S3Client":
-        """
-        Retrieves the S3 client, creating it if necessary.
-
-        Returns:
-            S3Client: The initialized S3 client.
-        """
-        self._client_context_creator = self._session.create_client(
-            "s3",
-            region_name=self._aws_region,
-            endpoint_url=self._aws_endpoint_url,
-            aws_access_key_id=self._aws_access_key_id,
-            aws_secret_access_key=self._aws_secret_access_key,
-        )
-        return await self._client_context_creator.__aenter__()
-
     async def startup(self) -> None:
-        """Initialize the result backend."""
-        self._s3_client = await self._get_client()
+        """Initialize the S3 client and ensure the bucket exists."""
+        credentials = None
+        if self._aws_access_key_id and self._aws_secret_access_key:
+            credentials = capo_s3.Credentials(
+                access_key=self._aws_access_key_id,
+                secret_key=self._aws_secret_access_key,
+            )
+        self._s3_client = capo_s3.AsyncS3Client(
+            region=self._aws_region,
+            endpoint=self._aws_endpoint_url,
+            credentials=credentials,
+            force_path_style=True,
+        )
+        await self._s3_client.__aenter__()
         try:
             await self._ensure_bucket_exists()
         except Exception:
-            await self._client_context_creator.__aexit__(None, None, None)
+            await self._s3_client.__aexit__(None, None, None)
             raise
         return await super().startup()
 
     async def _ensure_bucket_exists(self) -> None:
         try:
-            await self._s3_client.head_bucket(Bucket=self._bucket["name"])
-        except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code")
-            if code not in ("404", "NoSuchBucket"):
-                raise exceptions.ResultBackendError(code=code) from exc
+            await self._s3_client.head_bucket(bucket=self._bucket["name"])
+        except capo_s3.errors.NotFound:
             if not self._bucket.get("declare", True):
-                raise exceptions.BucketNotFoundError(bucket_name=self._bucket["name"]) from exc
+                raise exceptions.BucketNotFoundError(bucket_name=self._bucket["name"]) from None
             await self._create_bucket()
+        except capo_s3.errors.ServiceError as exc:
+            raise exceptions.ResultBackendError(code=exc.code) from exc
 
     async def _create_bucket(self) -> None:
-        create_kwargs: dict[str, Any] = {"Bucket": self._bucket["name"]}
+        create_kwargs: dict[str, Any] = {}
         if self._aws_region and self._aws_region != constants.AWS_DEFAULT_REGION:
-            create_kwargs["CreateBucketConfiguration"] = {"LocationConstraint": self._aws_region}
-        try:
-            await self._s3_client.create_bucket(**create_kwargs)
-        except ClientError as exc:
-            if exc.response.get("Error", {}).get("Code") != "BucketAlreadyOwnedByYou":  # can be raise between workers
-                raise
+            create_kwargs["create_bucket_configuration"] = {"location_constraint": self._aws_region}
+        with contextlib.suppress(capo_s3.errors.BucketAlreadyOwnedByYou):
+            await self._s3_client.create_bucket(bucket=self._bucket["name"], **create_kwargs)
 
     async def shutdown(self) -> None:
         """Shut down the result backend."""
-        await self._client_context_creator.__aexit__(None, None, None)
+        await self._s3_client.__aexit__(None, None, None)
         return await super().shutdown()
+
+    def _build_key(self, task_id: str) -> str:
+        if self._base_path:
+            return f"{self._base_path.rstrip('/')}/{task_id}"
+        return task_id
 
     async def set_result(
         self,
@@ -114,13 +107,10 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
         :param task_id: current task id.
         :param result: result of execution.
         """
-        if self._base_path:
-            task_id = f"{self._base_path.rstrip('/')}/{task_id}"
-
         await self._s3_client.put_object(
-            Bucket=self._bucket["name"],
-            Key=task_id,
-            Body=self._serializer.dumpb(model_dump(result)),
+            bucket=self._bucket["name"],
+            key=self._build_key(task_id),
+            body=self._serializer.dumpb(model_dump(result)),
         )
 
     async def get_result(
@@ -138,27 +128,17 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
         :param with_logs: whether to fetch logs.
         :return: result.
         """
-        result = None
-        if self._base_path:
-            task_id = f"{self._base_path.rstrip('/')}/{task_id}"
         try:
-            if response := await self._s3_client.get_object(
-                Bucket=self._bucket["name"],
-                Key=task_id,
-            ):
-                async with response["Body"] as stream:
-                    result = await stream.read()
-        except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code")
-            if code in ["NoSuchKey", "404"]:
-                raise exceptions.ResultIsMissingError(task_id=task_id) from exc
-            raise exceptions.ResultBackendError(code=code) from exc
-        if result is None:
-            raise exceptions.ResultIsMissingError(task_id=task_id)
+            async with self._s3_client.get_object(bucket=self._bucket["name"], key=self._build_key(task_id)) as output:
+                body = b"".join([chunk async for chunk in output["body"]])
+        except capo_s3.errors.NoSuchKey as exc:
+            raise exceptions.ResultIsMissingError(task_id=task_id) from exc
+        except capo_s3.errors.ServiceError as exc:
+            raise exceptions.ResultBackendError(code=exc.code) from exc
 
         taskiq_result = model_validate(
             TaskiqResult[_ReturnType],
-            self._serializer.loadb(result),
+            self._serializer.loadb(body),
         )
 
         if not with_logs:
@@ -173,17 +153,10 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
         :param task_id: id of a task.
         :return: True if result is ready.
         """
-        if self._base_path:
-            task_id = f"{self._base_path.rstrip('/')}/{task_id}"
         try:
-            if await self._s3_client.head_object(Bucket=self._bucket["name"], Key=task_id):
-                return True
-        except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code")
-            if code in ["NoSuchKey", "404"]:
-                pass
-            else:
-                raise exceptions.ResultBackendError(
-                    code=code,
-                ) from exc
-        return False
+            await self._s3_client.head_object(bucket=self._bucket["name"], key=self._build_key(task_id))
+        except capo_s3.errors.NotFound:
+            return False
+        except capo_s3.errors.ServiceError as exc:
+            raise exceptions.ResultBackendError(code=exc.code) from exc
+        return True

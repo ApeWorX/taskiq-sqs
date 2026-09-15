@@ -1,7 +1,6 @@
 import uuid
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock
 
 import pytest
 from taskiq.result import TaskiqResult
@@ -26,12 +25,13 @@ class TestResultBackend:
     async def test_when_result_set__then_result_is_actually_saved_to_s3(
         self,
         s3_backend: S3ResultBackend,
+        s3_client: "S3Client",
         s3_bucket: str,
         taskiq_result: TaskiqResult,
     ) -> None:
         await s3_backend.set_result("test_task_id", taskiq_result)
 
-        response = await s3_backend._s3_client.get_object(
+        response = await s3_client.get_object(
             Bucket=s3_bucket,
             Key="test_task_id",
         )
@@ -48,24 +48,17 @@ class TestResultBackend:
         assert retrieved_result.return_value == "test_value"
         assert retrieved_result.is_err is True
 
-    async def test_when_result_is_missing__then_get_result_raise_exception(
-        self,
-        s3_backend: S3ResultBackend,
-    ) -> None:
-        s3_backend._s3_client.get_object = AsyncMock(return_value={})  # Simulate a response with no Body
-        with pytest.raises(ResultIsMissingError):
-            await s3_backend.get_result("test_task_id")
-
     async def test_when_set_result_is_called__then_save_it_to_right_path(
         self,
         s3_backend: S3ResultBackend,
+        s3_client: "S3Client",
         s3_bucket: str,
         taskiq_result: TaskiqResult,
     ) -> None:
         s3_backend._base_path = "results"
         await s3_backend.set_result("test_task_id", taskiq_result)
 
-        response = await s3_backend._s3_client.head_object(
+        response = await s3_client.head_object(
             Bucket=s3_bucket,
             Key="results/test_task_id",
         )
