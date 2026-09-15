@@ -62,3 +62,31 @@ class InvalidDelaySecondsError(BaseTaskiqSQSError):
     __template__ = "delay must be an integer between 0 and {max_delay_seconds}, got {delay_seconds!r}"
     delay_seconds: object
     max_delay_seconds: int
+
+
+class FifoDelayNotSupportedError(BaseTaskiqSQSError):
+    """Error if a per-message delay is requested on a FIFO queue.
+
+    FIFO queues don't support delaying individual messages; delay can only be configured on the queue itself.
+    """
+
+    __template__ = "Per-message delay is not supported on FIFO queue '{queue_name}'; set it on the queue itself"
+    queue_name: str
+
+
+class InvalidMessageGroupIdError(BaseTaskiqSQSError):
+    """Error if a message's group_id label is invalid for a FIFO queue."""
+
+    __template__ = "group_id must be a non-empty string of at most {max_length} characters, got {group_id!r}"
+    group_id: object
+    max_length: int
+
+
+class InvalidMessageDeduplicationIdError(BaseTaskiqSQSError):
+    """Error if a message's deduplication_id label is invalid for a FIFO queue."""
+
+    __template__ = (
+        "deduplication_id must be a non-empty string of at most {max_length} characters, got {deduplication_id!r}"
+    )
+    deduplication_id: object
+    max_length: int

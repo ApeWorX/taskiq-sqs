@@ -89,6 +89,25 @@ async def send_reminder() -> None:
 
 A value outside the 0-900 range (or not an integer) raises `InvalidDelaySecondsError` when the task is kicked.
 
+## FIFO queues
+
+A queue whose name ends in `.fifo` is treated as a FIFO queue automatically, matching SQS's own naming rule (`SQSQueue`'s `is_fifo` field only needs to be set to override that default, and the queue's name must still end in `.fifo` for the broker to accept it as FIFO).
+
+```python
+from taskiq_sqs import SQSBroker
+from taskiq_sqs.types import SQSQueue
+
+broker = SQSBroker(queues=SQSQueue(name="my-queue.fifo"))
+
+@broker.task(group_id="orders")  # defaults to the task name if not set
+async def process_order() -> None:
+    ...
+```
+
+- `group_id` picks the message's `MessageGroupId` (required by SQS for every FIFO message); it defaults to the task's name.
+- `deduplication_id` sets `MessageDeduplicationId`; if not set, the queue must have content-based deduplication enabled, or SQS rejects the message.
+- The `delay` label (see [Delayed tasks](#delayed-tasks)) is not supported on FIFO queues — SQS only allows delay to be configured on the queue itself, not per message — and raises `FifoDelayNotSupportedError` if used.
+
 ## Offloading large messages to S3
 
 SQS messages are limited to 256 KiB. `S3OffloadMiddleware` transparently uploads task payloads that exceed a configurable threshold to S3 before sending them to the queue, and replaces the message with a reference to the uploaded object. The worker downloads the original payload back from S3 before executing the task, and (by default) removes it from S3 afterwards.
