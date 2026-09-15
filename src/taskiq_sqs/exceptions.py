@@ -90,3 +90,10 @@ class InvalidMessageDeduplicationIdError(BaseTaskiqSQSError):
     )
     deduplication_id: object
     max_length: int
+
+
+class InvalidExpiryError(BaseTaskiqSQSError):
+    """Error if a message's expiry label isn't a valid unix timestamp."""
+
+    __template__ = "expiry must be a non-negative unix timestamp (int or float), got {expiry!r}"
+    expiry: object
