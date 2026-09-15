@@ -23,8 +23,12 @@ nav = [
 
 use_directory_urls = true
 
+[project.extra]
+site_tagline = "SQS broker and S3 result backend for TaskIQ"
+
 [project.theme]
 language = "en"
+custom_dir = "docs/overrides"
 
 features = [
     "content.code.annotate",

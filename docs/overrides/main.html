@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{#-
+  One title, reused for the tab, Open Graph and Twitter cards, so they can't drift apart. The homepage carries
+  the tagline, since "taskiq-sqs" alone says nothing about SQS, S3 or TaskIQ.
+-#}
+{% macro seo_title() -%}
+  {%- if page and not page.url and config.extra.site_tagline -%}
+    {{ config.site_name }} — {{ config.extra.site_tagline }}
+  {%- elif page and page.meta and page.meta.title -%}
+    {{ page.meta.title }} - {{ config.site_name }}
+  {%- elif page and page.title -%}
+    {{ page.title | striptags }} - {{ config.site_name }}
+  {%- else -%}
+    {{ config.site_name }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro seo_description() -%}
+  {%- if page and page.meta and page.meta.description -%}
+    {{ page.meta.description }}
+  {%- else -%}
+    {{ config.site_description }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% block htmltitle %}
+  <title>{{ seo_title() }}</title>
+{% endblock %}
+
+{% block extrahead %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ seo_title() }}">
+  <meta property="og:description" content="{{ seo_description() }}">
+  <meta property="og:url" content="{{ page.canonical_url }}">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{ seo_title() }}">
+  <meta name="twitter:description" content="{{ seo_description() }}">
+{% endblock %}
