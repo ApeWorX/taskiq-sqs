@@ -1,29 +1,24 @@
+import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
-from typing import TYPE_CHECKING
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence
+from typing import Any
 
-from aiobotocore.session import get_session
-from botocore.exceptions import ClientError
+import capo_sqs
 from taskiq import AsyncBroker
 from taskiq.acks import AckableMessage
 from taskiq.message import BrokerMessage
 
 from taskiq_sqs import constants
-from taskiq_sqs.exceptions import BrokerInitError
+from taskiq_sqs.exceptions import BrokerInitError, UnknownQueueError
 from taskiq_sqs.types import SQSQueue
 
 
-if TYPE_CHECKING:
-    from types_aiobotocore_sqs.client import SQSClient
-    from types_aiobotocore_sqs.type_defs import (
-        GetQueueUrlResultTypeDef,
-        MessageTypeDef,
-        SendMessageRequestTypeDef,
-    )
-
-
 logger = logging.getLogger(__name__)
+
+SQS_QUEUE_LABEL = "sqs_queue"
+
+_QueueItem = AckableMessage | BaseException
 
 
 class SQSBroker(AsyncBroker):
@@ -31,23 +26,19 @@ class SQSBroker(AsyncBroker):
 
     def __init__(
         self,
-        queue_name: str,
+        queues: SQSQueue | Sequence[SQSQueue],
         endpoint_url: str | None = None,
         aws_region_name: str = constants.AWS_DEFAULT_REGION,
         aws_access_key_id: str | None = None,
         aws_secret_access_key: str | None = None,
-        wait_time_seconds: int = 0,
-        max_number_of_messages: int = 1,
     ) -> None:
         """Initialize the SQS broker.
 
-        :param: queue_name: The name of the SQS queue.
-        :param: endpoint_url: The SQS endpoint URL.
-        :param aws_region_name: The AWS region name.
-        :param aws_access_key_id: The AWS access key ID.
-        :param aws_secret_access_key: The AWS secret access key.
-        :param: wait_time_seconds: The wait time used for long polling.
-        :param: max_number_of_messages: Size of batch to receive from the queue.
+        :param queues: a single queue configuration, or a sequence of them for multiqueue support.ф
+        :param endpoint_url: the SQS endpoint URL.
+        :param aws_region_name: the AWS region name.
+        :param aws_access_key_id: the AWS access key ID.
+        :param aws_secret_access_key: the AWS secret access key.
         """
         super().__init__()
 
@@ -56,159 +47,181 @@ class SQSBroker(AsyncBroker):
         self._aws_secret_access_key = aws_secret_access_key
         self._aws_endpoint_url = endpoint_url
 
-        self._session = get_session()
-        self._startup_called = False
+        self._queues = self._normalize_queues(queues)
+        self._default_queue_name = self._queues[0]["name"]
+        self._queues_by_name = {queue["name"]: queue for queue in self._queues}
+        self._queue_urls: dict[str, str] = {}
 
-        self._sqs_queue_url: str | None = None
+    @staticmethod
+    def _normalize_queues(queues: SQSQueue | Sequence[SQSQueue]) -> list[SQSQueue]:
+        queue_list = [queues] if isinstance(queues, Mapping) else list(queues)
+        if not queue_list:
+            raise BrokerInitError(details="At least one queue must be configured.")
 
-        if max_number_of_messages > constants.MAX_NUMBER_OF_MESSAGES or max_number_of_messages < 1:
-            raise BrokerInitError(details="MaxNumberOfMessages can be no greater than 10 or less than 1")
-        self._max_number_of_messages = max_number_of_messages
+        names = [queue["name"] for queue in queue_list]
+        if len(names) != len(set(names)):
+            raise BrokerInitError(details="Queue names must be unique.")
 
-        if wait_time_seconds > constants.MAX_WAIT_TIME_SECONDS or wait_time_seconds < 0:
-            raise BrokerInitError(details="WaitTimeSeconds can be no greater than 20 or less than 0")
-        self._wait_time_seconds = wait_time_seconds
+        for queue in queue_list:
+            max_number_of_messages = queue.get("max_number_of_messages", 1)
+            if max_number_of_messages > constants.MAX_NUMBER_OF_MESSAGES or max_number_of_messages < 1:
+                raise BrokerInitError(
+                    details=f"MaxNumberOfMessages for queue '{queue['name']}' can be no greater than 10 or less than 1",
+                )
+            wait_time_seconds = queue.get("wait_time_seconds", 0)
+            if wait_time_seconds > constants.MAX_WAIT_TIME_SECONDS or wait_time_seconds < 0:
+                raise BrokerInitError(
+                    details=f"WaitTimeSeconds for queue '{queue['name']}' can be no greater than 20 or less than 0",
+                )
+        return queue_list
 
-        try:
-            self._default_queue: SQSQueue = SQSQueue(
-                name=queue_name,
-                max_number_of_messages=self._max_number_of_messages,
-                wait_time_seconds=self._wait_time_seconds,
-            )
-        except ValueError as error:
-            raise BrokerInitError(details="Invalid default queue configuration.") from error
+    def _resolve_queue(self, queue_name: str | None) -> SQSQueue:
+        name = queue_name or self._default_queue_name
+        queue = self._queues_by_name.get(name)
+        if queue is None:
+            raise UnknownQueueError(queue_name=name)
+        return queue
 
     @contextlib.contextmanager
-    def _handle_exceptions(self) -> Generator[None, None, None]:
+    def _handle_exceptions(self, queue_name: str) -> Generator[None, None, None]:
         """Handle exceptions raised by the SQS client."""
         try:
             yield
-        except ClientError as e:
-            error = e.response.get("Error", {})
-            code = error.get("Code")
-            error_message = error.get("Message")
-            if code == "AWS.SimpleQueueService.NonExistentQueue":
-                raise BrokerInitError(
-                    details=f"Queue not found {self._default_queue.name}",
-                ) from e
-            elif code in ["InvalidParameterValue", "NoSuchBucket"]:
-                raise BrokerInitError(details=error_message or "") from e
-            else:
-                raise BrokerInitError(details=code or "") from e
-
-    async def _get_sqs_client(self) -> "SQSClient":
-        self._client_context_creator = self._session.create_client(
-            "sqs",
-            region_name=self._aws_region,
-            endpoint_url=self._aws_endpoint_url,
-            aws_access_key_id=self._aws_access_key_id,
-            aws_secret_access_key=self._aws_secret_access_key,
-        )
-        return await self._client_context_creator.__aenter__()
-
-    async def _close_client(self) -> None:
-        """Closes the SQS/S3 client."""
-        await self._client_context_creator.__aexit__(None, None, None)
-
-    async def _get_queue_url(self) -> str:
-        if not self._sqs_queue_url:
-            with self._handle_exceptions():
-                queue_result: GetQueueUrlResultTypeDef = await self._sqs_client.get_queue_url(
-                    QueueName=self._default_queue.name,
-                )
-            self._sqs_queue_url = queue_result["QueueUrl"]
-        return self._sqs_queue_url
+        except capo_sqs.errors.QueueDoesNotExist as e:
+            raise BrokerInitError(details=f"Queue not found {queue_name}") from e
+        except capo_sqs.errors.ServiceError as e:
+            raise BrokerInitError(details=e.code or "") from e
 
     async def startup(self) -> None:
-        """Starts the SQS broker and checks that queue exists."""
-        self._startup_called = True
-        self._sqs_client = await self._get_sqs_client()
-
-        queue_url = await self._get_queue_url()
-        logger.info("Resolved queue '%s' URL: %s", self._default_queue.name, queue_url)
+        """Starts the SQS broker and checks that every configured queue exists."""
+        credentials = None
+        if self._aws_access_key_id and self._aws_secret_access_key:
+            credentials = capo_sqs.Credentials(
+                access_key=self._aws_access_key_id,
+                secret_key=self._aws_secret_access_key,
+            )
+        self._sqs_client = capo_sqs.AsyncSQSClient(
+            region=self._aws_region,
+            endpoint=self._aws_endpoint_url,
+            credentials=credentials,
+        )
+        await self._sqs_client.__aenter__()
+        try:
+            for queue in self._queues:
+                queue_url = await self._get_queue_url(queue["name"])
+                logger.info("Resolved queue '%s' URL: %s", queue["name"], queue_url)
+        except Exception:
+            await self._sqs_client.__aexit__(None, None, None)
+            raise
 
         await super().startup()
 
     async def shutdown(self) -> None:
         """Shuts down the SQS broker."""
-        await self._close_client()
+        await self._sqs_client.__aexit__(None, None, None)
         await super().shutdown()
+
+    async def _get_queue_url(self, queue_name: str) -> str:
+        if queue_name not in self._queue_urls:
+            with self._handle_exceptions(queue_name):
+                result = await self._sqs_client.get_queue_url(queue_name=queue_name)
+            self._queue_urls[queue_name] = result["queue_url"]
+        return self._queue_urls[queue_name]
 
     async def _build_kick_kwargs(
         self,
         message: BrokerMessage,
-    ) -> "SendMessageRequestTypeDef":
+        queue_url: str,
+    ) -> dict[str, Any]:
         """Build the kwargs for the SQS client kick method.
 
-        This function can be extended by the end user to
-        add additional kwargs in the message delivery.
+        This function can be extended by the end user to add additional kwargs in the message delivery.
         :param message: BrokerMessage object.
+        :param queue_url: URL of the queue the message will be sent to.
         """
-        kwargs: SendMessageRequestTypeDef = {
-            "QueueUrl": await self._get_queue_url(),
-            "MessageBody": message.message.decode("utf-8"),
+        return {
+            "queue_url": queue_url,
+            "message_body": message.message.decode("utf-8"),
         }
-        return kwargs
-
-    async def _send_message(
-        self,
-        message: BrokerMessage,
-    ) -> None:
-        """Send a single message.
-
-        :param message:
-        """
-        kwargs = await self._build_kick_kwargs(message)
-        with self._handle_exceptions():
-            await self._sqs_client.send_message(**kwargs)
 
     async def kick(self, message: BrokerMessage) -> None:
         """Kick tasks out from current program to configured SQS queue.
 
+        The target queue is picked from the `sqs_queue` label (see `SQS_QUEUE_LABEL`), falling back to the first
+        configured queue when the label isn't set.
+
         :param message: BrokerMessage object.
         """
-        await self._send_message(message)
+        queue = self._resolve_queue(message.labels.get(SQS_QUEUE_LABEL))
+        queue_url = await self._get_queue_url(queue["name"])
+        kwargs = await self._build_kick_kwargs(message, queue_url)
+        with self._handle_exceptions(queue["name"]):
+            await self._sqs_client.send_message(**kwargs)
 
     def _build_ack_function(
         self,
+        queue_name: str,
         queue_url: str,
         receipt_handle: str,
     ) -> Callable[[], Awaitable[None]]:
         """
         This method is used to build an ack for the message.
 
-        :param queue_url: queue url where the message is located
+        :param queue_name: name of the queue where the message is located.
+        :param queue_url: queue url where the message is located.
         :param receipt_handle: message to build ack for.
         """
 
         async def ack() -> None:
-            with self._handle_exceptions():
+            with self._handle_exceptions(queue_name):
                 await self._sqs_client.delete_message(
-                    QueueUrl=queue_url,
-                    ReceiptHandle=receipt_handle,
+                    queue_url=queue_url,
+                    receipt_handle=receipt_handle,
                 )
 
         return ack
 
+    async def _poll_queue(self, queue: SQSQueue, incoming: "asyncio.Queue[_QueueItem]") -> None:
+        """Continuously receive messages from a single queue and forward them to the shared incoming queue."""
+        try:
+            queue_url = await self._get_queue_url(queue["name"])
+            while True:
+                with self._handle_exceptions(queue["name"]):
+                    results = await self._sqs_client.receive_message(
+                        queue_url=queue_url,
+                        max_number_of_messages=queue.get("max_number_of_messages", 1),
+                        wait_time_seconds=queue.get("wait_time_seconds", 0),
+                    )
+                for message in results.get("messages", []):
+                    body = message.get("body")
+                    receipt_handle = message.get("receipt_handle")
+                    if body and receipt_handle:
+                        await incoming.put(
+                            AckableMessage(
+                                data=body.encode("utf-8"),
+                                ack=self._build_ack_function(queue["name"], queue_url, receipt_handle),
+                            ),
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await incoming.put(exc)
+
     async def listen(self) -> AsyncGenerator[AckableMessage, None]:
         """
-        This function listens to new messages and yields them.
+        This function listens to new messages on every configured queue and yields them.
 
         :yield: incoming AckableMessages.
         """
-        queue_url = await self._get_queue_url()
-
-        while True:
-            results = await self._sqs_client.receive_message(
-                QueueUrl=queue_url,
-                MaxNumberOfMessages=self._max_number_of_messages,
-                WaitTimeSeconds=self._wait_time_seconds,
-            )
-            messages: list[MessageTypeDef] = results.get("Messages", [])
-
-            for message in messages:
-                if (body := message.get("Body")) and (receipt_handle := message.get("ReceiptHandle")):
-                    yield AckableMessage(
-                        data=body.encode("utf-8"),
-                        ack=self._build_ack_function(queue_url, receipt_handle),
-                    )
+        incoming: asyncio.Queue[_QueueItem] = asyncio.Queue()
+        pollers = [asyncio.create_task(self._poll_queue(queue, incoming)) for queue in self._queues]
+        try:
+            while True:
+                item = await incoming.get()
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            for task in pollers:
+                task.cancel()
+            await asyncio.gather(*pollers, return_exceptions=True)

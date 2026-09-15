@@ -8,10 +8,11 @@ Run broker to send a task:
 
 import asyncio
 
+import capo_sqs
 import dotenv
-from aiobotocore.session import get_session
 
-from taskiq_sqs import S3Bucket, S3ResultBackend, SQSBroker
+from taskiq_sqs import S3ResultBackend, SQSBroker
+from taskiq_sqs.types import S3Bucket, SQSQueue
 
 
 dotenv.load_dotenv()
@@ -22,7 +23,7 @@ AWS_REGION = "us-east-1"
 
 
 broker = SQSBroker(
-    queue_name=QUEUE_NAME,
+    queues=SQSQueue(name=QUEUE_NAME),
     endpoint_url=ENDPOINT_URL,
     aws_region_name=AWS_REGION,
 ).with_result_backend(
@@ -42,13 +43,8 @@ async def i_love_aws() -> None:
 
 
 async def ensure_queue_exists() -> None:
-    session = get_session()
-    async with session.create_client(
-        "sqs",
-        region_name=AWS_REGION,
-        endpoint_url=ENDPOINT_URL,
-    ) as sqs:
-        await sqs.create_queue(QueueName=QUEUE_NAME)
+    async with capo_sqs.AsyncSQSClient(region=AWS_REGION, endpoint=ENDPOINT_URL) as sqs:
+        await sqs.create_queue(queue_name=QUEUE_NAME)
 
 
 async def main() -> None:

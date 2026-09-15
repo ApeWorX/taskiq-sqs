@@ -7,6 +7,7 @@ from taskiq.result import TaskiqResult
 from tests.conftest import AWSCredentials, _queue_name_from_url
 
 from taskiq_sqs import S3ResultBackend, SQSBroker
+from taskiq_sqs.types import SQSQueue
 
 
 BATCH_SIZE = 10
@@ -31,9 +32,11 @@ async def bench_broker(
     `ReceiveMessage` call serve the whole batch.
     """
     broker = SQSBroker(
-        queue_name=_queue_name_from_url(sqs_queue),
-        wait_time_seconds=1,
-        max_number_of_messages=BATCH_SIZE,
+        queues=SQSQueue(
+            name=_queue_name_from_url(sqs_queue),
+            wait_time_seconds=1,
+            max_number_of_messages=BATCH_SIZE,
+        ),
         **aws_credentials,
     )
     await broker.startup()

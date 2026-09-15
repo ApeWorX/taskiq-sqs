@@ -47,3 +47,10 @@ class OffloadedPayloadMissingError(BaseTaskiqSQSError):
     task_id: str
     bucket_name: str
     key: str
+
+
+class UnknownQueueError(BaseTaskiqSQSError):
+    """Error if a message references a queue that isn't configured on the broker."""
+
+    __template__ = "Message references queue '{queue_name}' which is not configured on this broker"
+    queue_name: str
