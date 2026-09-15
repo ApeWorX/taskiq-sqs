@@ -53,3 +53,10 @@ def validate_expiry(expiry: Any) -> float:
     if value < 0:
         raise InvalidExpiryError(expiry=expiry)
     return value
+
+
+def is_label_true(value: Any) -> bool:
+    """Interpret a boolean-ish message label the way taskiq's own label round-trip does."""
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)

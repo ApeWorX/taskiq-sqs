@@ -128,6 +128,19 @@ await process_event.kicker().with_labels(expiry=time.time() + 300).kiq()  # disc
 
 Expiration is checked by the worker on receipt, not by SQS itself — a message can still sit in the queue past its expiry (e.g. while workers are busy or scaled to zero), it just won't run once picked up. `expiry` must be a non-negative number; anything else raises `InvalidExpiryError` when the task is kicked.
 
+## Message batching
+
+Set `is_batching_enabled` on a queue to buffer kicked messages in memory and flush them together via `SendMessageBatch` (up to `batch_size` messages, or after `batch_timeout` seconds, whichever comes first) instead of sending each one immediately:
+
+```python
+from taskiq_sqs import SQSBroker
+from taskiq_sqs.types import SQSQueue
+
+broker = SQSBroker(
+    queues=SQSQueue(name="my-queue", is_batching_enabled=True, batch_size=10, batch_timeout=1.0),
+)
+```
+
 ## Offloading large messages to S3
 
 SQS messages are limited to 256 KiB. `S3OffloadMiddleware` transparently uploads task payloads that exceed a configurable threshold to S3 before sending them to the queue, and replaces the message with a reference to the uploaded object. The worker downloads the original payload back from S3 before executing the task, and (by default) removes it from S3 afterwards.
