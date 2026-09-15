@@ -9,6 +9,7 @@ from tests.conftest import _queue_name_from_url
 from taskiq_sqs import SQSBroker
 from taskiq_sqs.constants import (
     SQS_DELAY_SECONDS_LABEL,
+    SQS_EXPIRY_LABEL,
     SQS_MESSAGE_DEDUPLICATION_ID_LABEL,
     SQS_MESSAGE_GROUP_ID_LABEL,
     SQS_QUEUE_LABEL,
@@ -17,6 +18,7 @@ from taskiq_sqs.exceptions import (
     BrokerInitError,
     FifoDelayNotSupportedError,
     InvalidDelaySecondsError,
+    InvalidExpiryError,
     InvalidMessageDeduplicationIdError,
     InvalidMessageGroupIdError,
     UnknownQueueError,
@@ -101,7 +103,7 @@ async def test_when_kick_called_with_delay_label__then_message_is_delayed(
     assert len(delayed.get("messages", [])) == 1
 
 
-@pytest.mark.parametrize("delay_seconds", [-1, 901, "10", 10.5, True])
+@pytest.mark.parametrize("delay_seconds", [-1, 901, "not-a-number", 10.5, "10.5", True])
 async def test_when_kick_called_with_invalid_delay_label__then_should_raise_an_error(
     sqs_broker: SQSBroker,
     broker_message: BrokerMessage,
@@ -111,6 +113,46 @@ async def test_when_kick_called_with_invalid_delay_label__then_should_raise_an_e
 
     with pytest.raises(InvalidDelaySecondsError):
         await sqs_broker.kick(broker_message)
+
+
+async def test_when_kick_called_with_stringified_delay_label__then_it_is_accepted(
+    sqs_broker: SQSBroker,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+    broker_message: BrokerMessage,
+) -> None:
+    broker_message.labels[SQS_DELAY_SECONDS_LABEL] = "1"
+
+    await sqs_broker.kick(broker_message)
+
+    immediate = await sqs_client.receive_message(queue_url=sqs_queue)
+    assert not immediate.get("messages")
+
+    await asyncio.sleep(1.2)
+
+    delayed = await sqs_client.receive_message(queue_url=sqs_queue)
+    assert len(delayed.get("messages", [])) == 1
+
+
+async def test_when_task_kicked_through_kicker_with_delay_label__then_it_is_delayed(
+    sqs_broker: SQSBroker,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+) -> None:
+    """End-to-end regression test for the real `@broker.task()` / `.kiq()` path, not a hand-built BrokerMessage."""
+
+    @sqs_broker.task()
+    async def sample_task() -> None: ...
+
+    await sample_task.kicker().with_labels(**{SQS_DELAY_SECONDS_LABEL: 1}).kiq()
+
+    immediate = await sqs_client.receive_message(queue_url=sqs_queue)
+    assert not immediate.get("messages")
+
+    await asyncio.sleep(1.2)
+
+    delayed = await sqs_client.receive_message(queue_url=sqs_queue)
+    assert len(delayed.get("messages", [])) == 1
 
 
 async def test_when_kick_called_on_standard_queue__then_no_fifo_attributes_are_sent(
@@ -239,3 +281,33 @@ async def test_when_multiple_messages_kicked_to_same_group__then_order_is_preser
     response = await sqs_client.receive_message(queue_url=fifo_sqs_queue, max_number_of_messages=3)
     bodies = [message.get("body") for message in response.get("messages", [])]
     assert bodies == ["message-0", "message-1", "message-2"]
+
+
+@pytest.mark.parametrize("expiry", [-1, "soon", True])
+async def test_when_kick_called_with_invalid_expiry_label__then_should_raise_an_error(
+    sqs_broker: SQSBroker,
+    broker_message: BrokerMessage,
+    expiry: object,
+) -> None:
+    broker_message.labels[SQS_EXPIRY_LABEL] = expiry
+
+    with pytest.raises(InvalidExpiryError):
+        await sqs_broker.kick(broker_message)
+
+
+async def test_when_kick_called_with_stringified_expiry_label__then_it_is_accepted(
+    sqs_broker: SQSBroker,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+    broker_message: BrokerMessage,
+) -> None:
+    # same reasoning as test_when_kick_called_with_stringified_delay_label__then_it_is_accepted
+    broker_message.labels[SQS_EXPIRY_LABEL] = "1789505020.5"
+
+    await sqs_broker.kick(broker_message)
+
+    response = await sqs_client.receive_message(queue_url=sqs_queue, message_attribute_names=[SQS_EXPIRY_LABEL])
+    messages = response.get("messages", [])
+    assert len(messages) == 1
+    attribute = messages[0].get("message_attributes", {}).get(SQS_EXPIRY_LABEL, {})
+    assert attribute.get("string_value") == "1789505020.5"

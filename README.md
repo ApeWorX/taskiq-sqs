@@ -108,6 +108,26 @@ async def process_order() -> None:
 - `deduplication_id` sets `MessageDeduplicationId`; if not set, the queue must have content-based deduplication enabled, or SQS rejects the message.
 - The `delay` label (see [Delayed tasks](#delayed-tasks)) is not supported on FIFO queues — SQS only allows delay to be configured on the queue itself, not per message — and raises `FifoDelayNotSupportedError` if used.
 
+## Message expiration
+
+Set the `expiry` label to a unix timestamp; if a worker receives the message after that time, it's deleted without being executed:
+
+```python
+import time
+from taskiq_sqs import SQSBroker
+from taskiq_sqs.types import SQSQueue
+
+broker = SQSBroker(queues=SQSQueue(name="my-queue"))
+
+@broker.task()
+async def process_event() -> None:
+    ...
+
+await process_event.kicker().with_labels(expiry=time.time() + 300).kiq()  # discarded if received after 5 minutes
+```
+
+Expiration is checked by the worker on receipt, not by SQS itself — a message can still sit in the queue past its expiry (e.g. while workers are busy or scaled to zero), it just won't run once picked up. `expiry` must be a non-negative number; anything else raises `InvalidExpiryError` when the task is kicked.
+
 ## Offloading large messages to S3
 
 SQS messages are limited to 256 KiB. `S3OffloadMiddleware` transparently uploads task payloads that exceed a configurable threshold to S3 before sending them to the queue, and replaces the message with a reference to the uploaded object. The worker downloads the original payload back from S3 before executing the task, and (by default) removes it from S3 afterwards.
