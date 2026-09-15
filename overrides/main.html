@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{#-
+  404.html has no real `page` (`page.ancestors` and `page.toc` are its only
+  keys) — `page.url` is empty on both the homepage and 404, but only a real
+  page ever gets a `canonical_url`, so that's what tells them apart.
+-#}
+{% set is_real_page = page and page.canonical_url %}
+{% set is_homepage = is_real_page and page.canonical_url == config.site_url %}
+
+{#-
+  One title, reused for the tab, Open Graph and Twitter cards, so they can't drift apart. The homepage carries
+  the tagline, since "taskiq-sqs" alone says nothing about SQS, S3 or TaskIQ.
+-#}
+{% macro seo_title() -%}
+  {%- if is_homepage and config.extra.site_tagline -%}
+    {{ config.site_name }} — {{ config.extra.site_tagline }}
+  {%- elif page and page.meta and page.meta.title -%}
+    {{ page.meta.title }} - {{ config.site_name }}
+  {%- elif page and page.title -%}
+    {{ page.title | striptags }} - {{ config.site_name }}
+  {%- else -%}
+    {{ config.site_name }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro seo_description() -%}
+  {%- if page and page.meta and page.meta.description -%}
+    {{ page.meta.description }}
+  {%- else -%}
+    {{ config.site_description }}
+  {%- endif -%}
+{%- endmacro %}
+
+{#-
+  A nav section (e.g. "Tutorial") has no page of its own, so its breadcrumb
+  step points at the first page underneath it. `.canonical_url` is only set
+  on pages, not sections, so that's what tells the two apart here.
+-#}
+{% macro node_url(node) -%}
+  {%- if node.canonical_url -%}
+    {{- node.canonical_url -}}
+  {%- elif node.children -%}
+    {%- set found = namespace(url="") -%}
+    {%- for child in node.children -%}
+      {%- if not found.url -%}
+        {%- set found.url = node_url(child) | trim -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{- found.url -}}
+  {%- endif -%}
+{%- endmacro %}
+
+{% block htmltitle %}
+  <title>{{ seo_title() }}</title>
+{% endblock %}
+
+{% block extrahead %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ seo_title() }}">
+  <meta property="og:description" content="{{ seo_description() }}">
+  <meta property="og:url" content="{{ page.canonical_url }}">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{ seo_title() }}">
+  <meta name="twitter:description" content="{{ seo_description() }}">
+
+  {#- Breadcrumbs are the one rich result a small docs site reliably gets:
+      they replace the bare URL in the search snippet. -#}
+  {%- set home_url = config.site_url %}
+  {#- the page itself is the last step, so a section that merely opens on it
+      is not a step of its own -#}
+  {%- set initial_seen = [home_url, page.canonical_url] if page else [home_url] %}
+  {%- set acc = namespace(trail=[], seen=initial_seen) %}
+  {%- for ancestor in (page.ancestors if page else []) | reverse %}
+    {%- set url = node_url(ancestor) | trim %}
+    {%- if url and url not in acc.seen %}
+      {%- set acc.seen = acc.seen + [url] %}
+      {%- set acc.trail = acc.trail + [(ancestor.title, url)] %}
+    {%- endif %}
+  {%- endfor %}
+  {%- set trail = acc.trail %}
+  {%- if is_real_page and not is_homepage %}
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": {{ config.site_name | tojson }},
+          "item": {{ home_url | tojson }}
+        },
+        {%- for title, url in trail %}
+        {
+          "@type": "ListItem",
+          "position": {{ loop.index + 1 }},
+          "name": {{ title | striptags | tojson }},
+          "item": {{ url | tojson }}
+        },
+        {%- endfor %}
+        {
+          "@type": "ListItem",
+          "position": {{ trail | length + 2 }},
+          "name": {{ page.title | striptags | tojson }}
+        }
+      ]
+    }
+  </script>
+  {%- endif %}
+
+  {%- if is_homepage %}
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareSourceCode",
+      "name": {{ config.site_name | tojson }},
+      "description": {{ config.site_description | tojson }},
+      "url": {{ home_url | tojson }},
+      "codeRepository": {{ config.repo_url | tojson }},
+      "programmingLanguage": "Python",
+      "runtimePlatform": "Python 3",
+      "license": "https://github.com/taskiq-python/taskiq-sqs/blob/main/LICENSE",
+      "keywords": "taskiq, broker, aws, sqs, s3",
+      "author": {
+        "@type": "Person",
+        "name": {{ config.site_author | tojson }}
+      }
+    }
+  </script>
+  {%- endif %}
+{% endblock %}

@@ -1,5 +1,8 @@
 ---
 title: Priority queues
+description: >-
+  Run a batched low-priority queue and a FIFO urgent queue on the same taskiq-sqs broker,
+  worked example included.
 ---
 
 A single [`SQSBroker`](../index.md) can consume from several queues at once, so you don't need to run separate

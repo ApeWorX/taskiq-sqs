@@ -1,5 +1,8 @@
 ---
 title: Contributing
+description: >-
+  Set up taskiq-sqs locally with uv, run lint and tests against the ministack AWS emulator, and
+  build the docs with zensical.
 ---
 
 taskiq-sqs follows the same contribution philosophy as the rest of the taskiq ecosystem — see the

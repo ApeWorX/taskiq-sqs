@@ -1,5 +1,8 @@
 ---
 title: Reliable task delivery
+description: >-
+  Combine delayed tasks and message expiration on taskiq-sqs for a retry-then-give-up pattern
+  with no extra infrastructure.
 ---
 
 [Delayed tasks](../index.md#delayed-tasks) and [message expiration](../index.md#message-expiration) are two

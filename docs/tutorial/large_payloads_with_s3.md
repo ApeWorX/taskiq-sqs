@@ -1,5 +1,8 @@
 ---
 title: Large payloads with S3
+description: >-
+  Offload SQS messages past the 256 KiB limit to S3 with S3OffloadMiddleware, and pair it with
+  S3ResultBackend for the result.
 ---
 
 SQS messages are capped at 256 KiB, which real workloads can outgrow quickly — a document to summarize, a batch of
