@@ -28,7 +28,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest] # eventually add `windows-latest` and `macos-latest`
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: [ "3.11", "3.12", "3.13", "3.14" ]
     services:
       ministack:
         image: ministackorg/ministack:1.3.53

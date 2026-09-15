@@ -9,8 +9,8 @@ from taskiq.result import TaskiqResult
 from tests.conftest import AWSCredentials
 
 from taskiq_sqs import S3ResultBackend
-from taskiq_sqs.bucket import S3Bucket
 from taskiq_sqs.exceptions import BucketNotFoundError, ResultIsMissingError
+from taskiq_sqs.types import S3Bucket
 
 
 if TYPE_CHECKING:

@@ -7,8 +7,8 @@ from aiobotocore.session import get_session
 from taskiq import BrokerMessage
 from types_aiobotocore_sqs.client import SQSClient
 
-from taskiq_sqs import S3ResultBackend, SQSBroker
-from taskiq_sqs.bucket import S3Bucket
+from taskiq_sqs import S3OffloadMiddleware, S3ResultBackend, SQSBroker
+from taskiq_sqs.types import S3Bucket
 
 
 if TYPE_CHECKING:
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 ENDPOINT_URL = "http://localhost:4566"
 TEST_BUCKET = "test-bucket"
+TEST_OFFLOAD_BUCKET = "test-offload-bucket"
 QUEUE_NAME = "test-queue"
 
 
@@ -83,6 +84,37 @@ async def s3_backend(
     assert backend._s3_client
     yield backend
     await backend.shutdown()
+
+
+@pytest.fixture
+async def s3_offload_bucket(s3_client: S3ResultBackend) -> AsyncGenerator[str, Any]:
+    response = await s3_client.create_bucket(Bucket=TEST_OFFLOAD_BUCKET)
+    assert response["ResponseMetadata"]["HTTPStatusCode"] == 200
+    yield TEST_OFFLOAD_BUCKET
+    response = await s3_client.list_objects_v2(Bucket=TEST_OFFLOAD_BUCKET)
+    if "Contents" in response:
+        objects_to_delete = [{"Key": obj["Key"]} for obj in response.get("Contents", [])]
+        if objects_to_delete:
+            await s3_client.delete_objects(
+                Bucket=TEST_OFFLOAD_BUCKET,
+                Delete={"Objects": objects_to_delete},
+            )
+    await s3_client.delete_bucket(Bucket=TEST_OFFLOAD_BUCKET)
+
+
+@pytest.fixture
+async def s3_offload_middleware(
+    aws_credentials: AWSCredentials,
+    s3_offload_bucket: str,  # noqa: ARG001
+) -> AsyncGenerator[S3OffloadMiddleware, Any]:
+    middleware = S3OffloadMiddleware(
+        bucket=S3Bucket(name=TEST_OFFLOAD_BUCKET),
+        max_message_size=64,
+        **aws_credentials,
+    )
+    await middleware.startup()
+    yield middleware
+    await middleware.shutdown()
 
 
 @pytest.fixture

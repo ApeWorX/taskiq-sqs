@@ -38,3 +38,12 @@ class ResultIsMissingError(BaseTaskiqSQSError):
 
     __template__ = "Result for task {task_id} is missing in the result backend"
     task_id: str
+
+
+class OffloadedPayloadMissingError(BaseTaskiqSQSError):
+    """Error if a message references an S3-offloaded payload that can't be found."""
+
+    __template__ = "Offloaded payload for task {task_id} is missing in bucket '{bucket_name}' (key: {key})"
+    task_id: str
+    bucket_name: str
+    key: str

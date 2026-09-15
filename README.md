@@ -81,3 +81,33 @@ async def main() -> None:
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+## Offloading large messages to S3
+
+SQS messages are limited to 256 KiB. `S3OffloadMiddleware` transparently uploads task payloads that exceed a configurable threshold to S3 before sending them to the queue, and replaces the message with a reference to the uploaded object. The worker downloads the original payload back from S3 before executing the task, and (by default) removes it from S3 afterwards.
+
+```python
+import asyncio
+from taskiq_sqs import S3Bucket, S3OffloadMiddleware, SQSBroker
+
+broker = SQSBroker("http://localhost:4566/000000000000/my-queue")
+broker.add_middlewares(
+    S3OffloadMiddleware(
+        bucket=S3Bucket(name="offload-bucket"),  # created automatically if it doesn't exist
+        max_message_size=200_000,  # payloads larger than this many bytes are offloaded to S3
+    ),
+)
+
+@broker.task
+async def process_document(content: str) -> int:
+    return len(content)
+
+
+async def main() -> None:
+    await broker.startup()
+    await process_document.kiq("x" * 1_000_000)  # too large for SQS, transparently offloaded to S3
+    await broker.shutdown()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```

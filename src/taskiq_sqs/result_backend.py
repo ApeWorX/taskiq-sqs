@@ -9,7 +9,7 @@ from taskiq.result import TaskiqResult
 from taskiq.serializers import JSONSerializer
 
 from taskiq_sqs import constants, exceptions
-from taskiq_sqs.bucket import S3Bucket
+from taskiq_sqs.types import S3Bucket
 
 
 if TYPE_CHECKING:
@@ -79,17 +79,17 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
 
     async def _ensure_bucket_exists(self) -> None:
         try:
-            await self._s3_client.head_bucket(Bucket=self._bucket.name)
+            await self._s3_client.head_bucket(Bucket=self._bucket["name"])
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code")
             if code not in ("404", "NoSuchBucket"):
                 raise exceptions.ResultBackendError(code=code) from exc
-            if not self._bucket.declare:
-                raise exceptions.BucketNotFoundError(bucket_name=self._bucket.name) from exc
+            if not self._bucket.get("declare", True):
+                raise exceptions.BucketNotFoundError(bucket_name=self._bucket["name"]) from exc
             await self._create_bucket()
 
     async def _create_bucket(self) -> None:
-        create_kwargs: dict[str, Any] = {"Bucket": self._bucket.name}
+        create_kwargs: dict[str, Any] = {"Bucket": self._bucket["name"]}
         if self._aws_region and self._aws_region != constants.AWS_DEFAULT_REGION:
             create_kwargs["CreateBucketConfiguration"] = {"LocationConstraint": self._aws_region}
         try:
@@ -118,7 +118,7 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
             task_id = f"{self._base_path.rstrip('/')}/{task_id}"
 
         await self._s3_client.put_object(
-            Bucket=self._bucket.name,
+            Bucket=self._bucket["name"],
             Key=task_id,
             Body=self._serializer.dumpb(model_dump(result)),
         )
@@ -143,7 +143,7 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
             task_id = f"{self._base_path.rstrip('/')}/{task_id}"
         try:
             if response := await self._s3_client.get_object(
-                Bucket=self._bucket.name,
+                Bucket=self._bucket["name"],
                 Key=task_id,
             ):
                 async with response["Body"] as stream:
@@ -176,7 +176,7 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
         if self._base_path:
             task_id = f"{self._base_path.rstrip('/')}/{task_id}"
         try:
-            if await self._s3_client.head_object(Bucket=self._bucket.name, Key=task_id):
+            if await self._s3_client.head_object(Bucket=self._bucket["name"], Key=task_id):
                 return True
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code")
