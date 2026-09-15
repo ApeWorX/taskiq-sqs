@@ -11,7 +11,7 @@ from taskiq.message import BrokerMessage
 
 from taskiq_sqs import constants
 from taskiq_sqs.exceptions import BrokerInitError
-from taskiq_sqs.queue import SQSQueue
+from taskiq_sqs.types import SQSQueue
 
 
 if TYPE_CHECKING:
