@@ -18,12 +18,13 @@ Here is an example of how to use the SQS broker with the S3 backend:
 
 ```python
 import asyncio
-from taskiq_sqs import S3Bucket, S3ResultBackend, SQSBroker
+from taskiq_sqs import S3ResultBackend, SQSBroker
+from taskiq_sqs.types import S3Bucket, SQSQueue
 
-QUEUE_NAME = "my-queue"
 broker = SQSBroker(
-    "http://localhost:4566/000000000000/my-queue",  # specify existing queue
-    sqs_region_override="us-east-1"
+    queues=SQSQueue(name="my-queue"),  # specify an existing queue
+    endpoint_url="http://localhost:4566",
+    aws_region_name="us-east-1",
 ).with_result_backend(
     S3ResultBackend(
         bucket=S3Bucket(name="response-bucket")  # by default backend will create bucket for you if it does not exist
@@ -49,38 +50,27 @@ How to run:
 - run worker first with `taskiq worker examples.example_broker:broker`
 - after that run broker to create a task and wait for result: `python examples/example_broker.py`
 
-## Message expiration
+## Multiple queues
 
-If you set the `sqs_expiry` label to a unix timestamp, the message will be discarded if the worker receives it after that time.
+`SQSBroker` accepts a single queue or a list of them. The first queue is the default one, used whenever a task doesn't say otherwise. To send a task to a specific queue, set the `sqs_queue` label with that queue's name:
 
 ```python
-import asyncio
 from taskiq_sqs import SQSBroker
+from taskiq_sqs.types import SQSQueue
 
-broker = SQSBroker("http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/my-queue")
+broker = SQSBroker(
+    queues=[
+        SQSQueue(name="default-queue"),
+        SQSQueue(name="high-priority-queue", wait_time_seconds=5),
+    ],
+)
 
-@broker.task
-async def add_one(value: int) -> int:
-    return value + 1
-
-
-async def main() -> None:
-    # Never forget to call startup in the beginning.
-    await broker.startup()
-    # Send the task to the broker.
-    task = await add_one.kiq(1)
-    # Wait for the result. (result backend must be configured)
-    result = await task.wait_result(timeout=2)
-    print(f"Task execution took: {result.execution_time} seconds.")
-    if not result.is_err:
-        print(f"Returned value: {result.return_value}")
-    else:
-        print("Error found while executing task.")
-    await broker.shutdown()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+@broker.task(sqs_queue="high-priority-queue")  # "sqs_queue" is taskiq_sqs.broker.SQS_QUEUE_LABEL
+async def urgent_task() -> None:
+    ...
 ```
+
+A worker started against this broker consumes from every configured queue at once. Passing a queue name through the `sqs_queue` label that isn't configured on the broker raises `UnknownQueueError`.
 
 ## Offloading large messages to S3
 
@@ -88,9 +78,10 @@ SQS messages are limited to 256 KiB. `S3OffloadMiddleware` transparently uploads
 
 ```python
 import asyncio
-from taskiq_sqs import S3Bucket, S3OffloadMiddleware, SQSBroker
+from taskiq_sqs import S3OffloadMiddleware, SQSBroker
+from taskiq_sqs.types import S3Bucket, SQSQueue
 
-broker = SQSBroker("http://localhost:4566/000000000000/my-queue")
+broker = SQSBroker(queues=SQSQueue(name="my-queue"))
 broker.add_middlewares(
     S3OffloadMiddleware(
         bucket=S3Bucket(name="offload-bucket"),  # created automatically if it doesn't exist

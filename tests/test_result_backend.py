@@ -1,7 +1,8 @@
 import uuid
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+import capo_s3
 import pytest
 from taskiq.result import TaskiqResult
 
@@ -10,10 +11,6 @@ from tests.conftest import AWSCredentials
 from taskiq_sqs import S3ResultBackend
 from taskiq_sqs.exceptions import BucketNotFoundError, ResultIsMissingError
 from taskiq_sqs.types import S3Bucket
-
-
-if TYPE_CHECKING:
-    from types_aiobotocore_s3.client import S3Client
 
 
 @pytest.fixture
@@ -25,17 +22,14 @@ class TestResultBackend:
     async def test_when_result_set__then_result_is_actually_saved_to_s3(
         self,
         s3_backend: S3ResultBackend,
-        s3_client: "S3Client",
+        s3_client: capo_s3.AsyncS3Client,
         s3_bucket: str,
         taskiq_result: TaskiqResult,
     ) -> None:
         await s3_backend.set_result("test_task_id", taskiq_result)
 
-        response = await s3_client.get_object(
-            Bucket=s3_bucket,
-            Key="test_task_id",
-        )
-        assert response["Body"] is not None
+        async with s3_client.get_object(bucket=s3_bucket, key="test_task_id") as response:
+            assert response["body"] is not None
 
     async def test_when_result_present_in_s3__then_get_result_return_it(
         self,
@@ -51,17 +45,14 @@ class TestResultBackend:
     async def test_when_set_result_is_called__then_save_it_to_right_path(
         self,
         s3_backend: S3ResultBackend,
-        s3_client: "S3Client",
+        s3_client: capo_s3.AsyncS3Client,
         s3_bucket: str,
         taskiq_result: TaskiqResult,
     ) -> None:
         s3_backend._base_path = "results"
         await s3_backend.set_result("test_task_id", taskiq_result)
 
-        response = await s3_client.head_object(
-            Bucket=s3_bucket,
-            Key="results/test_task_id",
-        )
+        response = await s3_client.head_object(bucket=s3_bucket, key="results/test_task_id")
         assert response is not None
 
     async def test_when_result_is_set__then_we_should_be_able_to_get_it(
@@ -128,12 +119,12 @@ class TestBucketDeclare:
     backend: S3ResultBackend | None
 
     @staticmethod
-    async def _bucket_exists(s3_client: "S3Client", name: str) -> bool:
+    async def _bucket_exists(s3_client: capo_s3.AsyncS3Client, name: str) -> bool:
         response = await s3_client.list_buckets()
-        return any(bucket["Name"] == name for bucket in response.get("Buckets", []))
+        return any(bucket.get("name") == name for bucket in response.get("buckets", []))
 
     @pytest.fixture(autouse=True)
-    async def _setup(self, s3_client: "S3Client") -> AsyncGenerator[None, Any]:
+    async def _setup(self, s3_client: capo_s3.AsyncS3Client) -> AsyncGenerator[None, Any]:
         self.tmp_bucket_name = f"declare-test-{uuid.uuid4().hex[:8]}"
         self.backend = None
         yield
@@ -141,16 +132,16 @@ class TestBucketDeclare:
             await self.backend.shutdown()
         if not await self._bucket_exists(s3_client, self.tmp_bucket_name):
             return
-        response = await s3_client.list_objects_v2(Bucket=self.tmp_bucket_name)
-        objects = [{"Key": obj["Key"]} for obj in response.get("Contents", [])]
+        response = await s3_client.list_objects_v2(bucket=self.tmp_bucket_name)
+        objects = [{"key": obj["key"]} for obj in response.get("contents", []) if "key" in obj]
         if objects:
-            await s3_client.delete_objects(Bucket=self.tmp_bucket_name, Delete={"Objects": objects})
-        await s3_client.delete_bucket(Bucket=self.tmp_bucket_name)
+            await s3_client.delete_objects(bucket=self.tmp_bucket_name, delete={"objects": objects})
+        await s3_client.delete_bucket(bucket=self.tmp_bucket_name)
 
     async def test_when_declare_true_and_bucket_missing__then_bucket_is_created_on_startup(
         self,
         aws_credentials: AWSCredentials,
-        s3_client: "S3Client",
+        s3_client: capo_s3.AsyncS3Client,
     ) -> None:
         self.backend = S3ResultBackend(
             bucket=S3Bucket(name=self.tmp_bucket_name, declare=True),
@@ -163,7 +154,7 @@ class TestBucketDeclare:
     async def test_when_declare_false_and_bucket_missing__then_startup_raises(
         self,
         aws_credentials: AWSCredentials,
-        s3_client: "S3Client",
+        s3_client: capo_s3.AsyncS3Client,
     ) -> None:
         backend = S3ResultBackend(
             bucket=S3Bucket(name=self.tmp_bucket_name, declare=False),
@@ -178,7 +169,7 @@ class TestBucketDeclare:
     async def test_when_declare_false_and_bucket_exists__then_startup_succeeds(
         self,
         aws_credentials: AWSCredentials,
-        s3_client: "S3Client",
+        s3_client: capo_s3.AsyncS3Client,
         s3_bucket: str,
     ) -> None:
         self.backend = S3ResultBackend(
@@ -192,7 +183,7 @@ class TestBucketDeclare:
     async def test_when_declare_true_and_bucket_already_exists__then_startup_is_idempotent(
         self,
         aws_credentials: AWSCredentials,
-        s3_client: "S3Client",
+        s3_client: capo_s3.AsyncS3Client,
         s3_bucket: str,
     ) -> None:
         self.backend = S3ResultBackend(
