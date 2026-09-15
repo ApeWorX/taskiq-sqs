@@ -3,8 +3,8 @@ name = "taskiq-sqs"
 version = "0.0.11"
 description = "SQS Broker for TaskIQ"
 readme = "README.md"
-licence = "MIT"
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
