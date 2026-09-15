@@ -54,3 +54,11 @@ class UnknownQueueError(BaseTaskiqSQSError):
 
     __template__ = "Message references queue '{queue_name}' which is not configured on this broker"
     queue_name: str
+
+
+class InvalidDelaySecondsError(BaseTaskiqSQSError):
+    """Error if a message's delay label is outside SQS's allowed range."""
+
+    __template__ = "sqs_delay_seconds must be an integer between 0 and {max_delay_seconds}, got {delay_seconds!r}"
+    delay_seconds: object
+    max_delay_seconds: int

@@ -10,13 +10,11 @@ from taskiq.acks import AckableMessage
 from taskiq.message import BrokerMessage
 
 from taskiq_sqs import constants
-from taskiq_sqs.exceptions import BrokerInitError, UnknownQueueError
+from taskiq_sqs.exceptions import BrokerInitError, InvalidDelaySecondsError, UnknownQueueError
 from taskiq_sqs.types import SQSQueue
 
 
 logger = logging.getLogger(__name__)
-
-SQS_QUEUE_LABEL = "sqs_queue"
 
 _QueueItem = AckableMessage | BaseException
 
@@ -34,7 +32,7 @@ class SQSBroker(AsyncBroker):
     ) -> None:
         """Initialize the SQS broker.
 
-        :param queues: a single queue configuration, or a sequence of them for multiqueue support.ф
+        :param queues: a single queue configuration, or a sequence of them for multiqueue support.
         :param endpoint_url: the SQS endpoint URL.
         :param aws_region_name: the AWS region name.
         :param aws_access_key_id: the AWS access key ID.
@@ -139,20 +137,25 @@ class SQSBroker(AsyncBroker):
         :param message: BrokerMessage object.
         :param queue_url: URL of the queue the message will be sent to.
         """
-        return {
+        kwargs: dict[str, Any] = {
             "queue_url": queue_url,
             "message_body": message.message.decode("utf-8"),
         }
+        if constants.SQS_DELAY_SECONDS_LABEL in message.labels:
+            kwargs["delay_seconds"] = self._validate_delay_seconds(message.labels[constants.SQS_DELAY_SECONDS_LABEL])
+        return kwargs
+
+    @staticmethod
+    def _validate_delay_seconds(delay_seconds: Any) -> int:
+        if isinstance(delay_seconds, bool) or not isinstance(delay_seconds, int):
+            raise InvalidDelaySecondsError(delay_seconds=delay_seconds, max_delay_seconds=constants.MAX_DELAY_SECONDS)
+        if delay_seconds < 0 or delay_seconds > constants.MAX_DELAY_SECONDS:
+            raise InvalidDelaySecondsError(delay_seconds=delay_seconds, max_delay_seconds=constants.MAX_DELAY_SECONDS)
+        return delay_seconds
 
     async def kick(self, message: BrokerMessage) -> None:
-        """Kick tasks out from current program to configured SQS queue.
-
-        The target queue is picked from the `sqs_queue` label (see `SQS_QUEUE_LABEL`), falling back to the first
-        configured queue when the label isn't set.
-
-        :param message: BrokerMessage object.
-        """
-        queue = self._resolve_queue(message.labels.get(SQS_QUEUE_LABEL))
+        """Kick tasks out from current program to configured SQS queue."""
+        queue = self._resolve_queue(message.labels.get(constants.SQS_QUEUE_LABEL))
         queue_url = await self._get_queue_url(queue["name"])
         kwargs = await self._build_kick_kwargs(message, queue_url)
         with self._handle_exceptions(queue["name"]):
