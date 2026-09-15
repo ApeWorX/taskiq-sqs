@@ -10,7 +10,14 @@ from taskiq.acks import AckableMessage
 from taskiq.message import BrokerMessage
 
 from taskiq_sqs import constants
-from taskiq_sqs.exceptions import BrokerInitError, InvalidDelaySecondsError, UnknownQueueError
+from taskiq_sqs.exceptions import (
+    BrokerInitError,
+    FifoDelayNotSupportedError,
+    InvalidDelaySecondsError,
+    InvalidMessageDeduplicationIdError,
+    InvalidMessageGroupIdError,
+    UnknownQueueError,
+)
 from taskiq_sqs.types import SQSQueue
 
 
@@ -71,6 +78,12 @@ class SQSBroker(AsyncBroker):
                 raise BrokerInitError(
                     details=f"WaitTimeSeconds for queue '{queue['name']}' can be no greater than 20 or less than 0",
                 )
+            ends_with_fifo_suffix = queue["name"].endswith(".fifo")
+            if "is_fifo" in queue and queue["is_fifo"] != ends_with_fifo_suffix:
+                raise BrokerInitError(
+                    details=f"Queue '{queue['name']}' has is_fifo={queue['is_fifo']}, but SQS requires FIFO queue "
+                    "names to end in '.fifo' and standard queue names not to",
+                )
         return queue_list
 
     def _resolve_queue(self, queue_name: str | None) -> SQSQueue:
@@ -129,20 +142,31 @@ class SQSBroker(AsyncBroker):
     async def _build_kick_kwargs(
         self,
         message: BrokerMessage,
+        queue: SQSQueue,
         queue_url: str,
     ) -> dict[str, Any]:
         """Build the kwargs for the SQS client kick method.
 
         This function can be extended by the end user to add additional kwargs in the message delivery.
         :param message: BrokerMessage object.
+        :param queue: the queue the message will be sent to.
         :param queue_url: URL of the queue the message will be sent to.
         """
         kwargs: dict[str, Any] = {
             "queue_url": queue_url,
             "message_body": message.message.decode("utf-8"),
         }
+        is_fifo = queue.get("is_fifo", queue["name"].endswith(".fifo"))
         if constants.SQS_DELAY_SECONDS_LABEL in message.labels:
+            if is_fifo:
+                raise FifoDelayNotSupportedError(queue_name=queue["name"])
             kwargs["delay_seconds"] = self._validate_delay_seconds(message.labels[constants.SQS_DELAY_SECONDS_LABEL])
+        if is_fifo:
+            group_id = message.labels.get(constants.SQS_MESSAGE_GROUP_ID_LABEL, message.task_name)
+            kwargs["message_group_id"] = self._validate_message_group_id(group_id)
+            if constants.SQS_MESSAGE_DEDUPLICATION_ID_LABEL in message.labels:
+                deduplication_id = message.labels[constants.SQS_MESSAGE_DEDUPLICATION_ID_LABEL]
+                kwargs["message_deduplication_id"] = self._validate_message_deduplication_id(deduplication_id)
         return kwargs
 
     @staticmethod
@@ -153,11 +177,26 @@ class SQSBroker(AsyncBroker):
             raise InvalidDelaySecondsError(delay_seconds=delay_seconds, max_delay_seconds=constants.MAX_DELAY_SECONDS)
         return delay_seconds
 
+    @staticmethod
+    def _validate_message_group_id(group_id: Any) -> str:
+        if not isinstance(group_id, str) or not (1 <= len(group_id) <= constants.MAX_FIFO_ID_LENGTH):
+            raise InvalidMessageGroupIdError(group_id=group_id, max_length=constants.MAX_FIFO_ID_LENGTH)
+        return group_id
+
+    @staticmethod
+    def _validate_message_deduplication_id(deduplication_id: Any) -> str:
+        if not isinstance(deduplication_id, str) or not (1 <= len(deduplication_id) <= constants.MAX_FIFO_ID_LENGTH):
+            raise InvalidMessageDeduplicationIdError(
+                deduplication_id=deduplication_id,
+                max_length=constants.MAX_FIFO_ID_LENGTH,
+            )
+        return deduplication_id
+
     async def kick(self, message: BrokerMessage) -> None:
         """Kick tasks out from current program to configured SQS queue."""
         queue = self._resolve_queue(message.labels.get(constants.SQS_QUEUE_LABEL))
         queue_url = await self._get_queue_url(queue["name"])
-        kwargs = await self._build_kick_kwargs(message, queue_url)
+        kwargs = await self._build_kick_kwargs(message, queue, queue_url)
         with self._handle_exceptions(queue["name"]):
             await self._sqs_client.send_message(**kwargs)
 

@@ -121,8 +121,12 @@ async def sqs_client(aws_credentials: AWSCredentials) -> AsyncGenerator[capo_sqs
     await client.__aexit__(None, None, None)
 
 
-async def _create_queue(sqs_client: capo_sqs.AsyncSQSClient, name: str) -> str:
-    response = await sqs_client.create_queue(queue_name=name)
+async def _create_queue(
+    sqs_client: capo_sqs.AsyncSQSClient,
+    name: str,
+    attributes: dict[str, str] | None = None,
+) -> str:
+    response = await sqs_client.create_queue(queue_name=name, attributes=attributes)
     queue_url = response.get("queue_url")
     assert queue_url is not None
     return queue_url
@@ -138,6 +142,17 @@ async def sqs_queue(sqs_client: capo_sqs.AsyncSQSClient) -> AsyncGenerator[str, 
 @pytest.fixture
 async def sqs_second_queue(sqs_client: capo_sqs.AsyncSQSClient) -> AsyncGenerator[str, Any]:
     queue_url = await _create_queue(sqs_client, f"{QUEUE_NAME}-second-{uuid.uuid4().hex}")
+    yield queue_url
+    await sqs_client.delete_queue(queue_url=queue_url)
+
+
+@pytest.fixture
+async def fifo_sqs_queue(sqs_client: capo_sqs.AsyncSQSClient) -> AsyncGenerator[str, Any]:
+    queue_url = await _create_queue(
+        sqs_client,
+        f"{QUEUE_NAME}-fifo-{uuid.uuid4().hex}.fifo",
+        attributes={"FifoQueue": "true", "ContentBasedDeduplication": "true"},
+    )
     yield queue_url
     await sqs_client.delete_queue(queue_url=queue_url)
 
@@ -158,6 +173,20 @@ async def sqs_broker(
     await broker.startup()
     assert broker._sqs_client
     assert broker._queue_urls
+    yield broker
+    await broker.shutdown()
+
+
+@pytest.fixture
+async def fifo_sqs_broker(
+    aws_credentials: AWSCredentials,
+    fifo_sqs_queue: str,
+) -> AsyncGenerator[SQSBroker, Any]:
+    broker = SQSBroker(
+        queues=SQSQueue(name=_queue_name_from_url(fifo_sqs_queue)),
+        **aws_credentials,
+    )
+    await broker.startup()
     yield broker
     await broker.shutdown()
 

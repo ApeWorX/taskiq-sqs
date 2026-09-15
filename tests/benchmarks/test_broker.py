@@ -10,8 +10,9 @@ from taskiq_sqs import SQSBroker
 
 @pytest.mark.benchmark
 async def test_build_kick_kwargs(bench_broker: SQSBroker, broker_message: BrokerMessage) -> None:
-    queue_url = await bench_broker._get_queue_url(bench_broker._default_queue_name)
-    await bench_broker._build_kick_kwargs(broker_message, queue_url)
+    queue = bench_broker._resolve_queue(None)
+    queue_url = await bench_broker._get_queue_url(queue["name"])
+    await bench_broker._build_kick_kwargs(broker_message, queue, queue_url)
 
 
 @pytest.mark.benchmark
