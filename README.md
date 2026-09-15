@@ -52,7 +52,7 @@ How to run:
 
 ## Multiple queues
 
-`SQSBroker` accepts a single queue or a list of them. The first queue is the default one, used whenever a task doesn't say otherwise. To send a task to a specific queue, set the `sqs_queue` label with that queue's name:
+`SQSBroker` accepts a single queue or a list of them. The first queue is the default one, used whenever a task doesn't say otherwise. To send a task to a specific queue, set the `queue_name` label with that queue's name:
 
 ```python
 from taskiq_sqs import SQSBroker
@@ -65,16 +65,16 @@ broker = SQSBroker(
     ],
 )
 
-@broker.task(sqs_queue="high-priority-queue")  # "sqs_queue" is taskiq_sqs.constants.SQS_QUEUE_LABEL
+@broker.task(queue_name="high-priority-queue")
 async def urgent_task() -> None:
     ...
 ```
 
-A worker started against this broker consumes from every configured queue at once. Passing a queue name through the `sqs_queue` label that isn't configured on the broker raises `UnknownQueueError`.
+A worker started against this broker consumes from every configured queue at once. Passing a queue name through the `queue_name` label that isn't configured on the broker raises `UnknownQueueError`.
 
 ## Delayed tasks
 
-Set the `sqs_delay_seconds` label to delay delivery of a task by that many seconds (0-900, SQS's own limit):
+Set the `delay` label to delay delivery of a task by that many seconds (0-900, SQS's own limit)
 
 ```python
 from taskiq_sqs import SQSBroker
@@ -82,7 +82,7 @@ from taskiq_sqs.types import SQSQueue
 
 broker = SQSBroker(queues=SQSQueue(name="my-queue"))
 
-@broker.task(sqs_delay_seconds=30)  # "sqs_delay_seconds" is taskiq_sqs.constants.SQS_DELAY_SECONDS_LABEL
+@broker.task(delay=30)  # "delay" is taskiq_sqs.constants.SQS_DELAY_SECONDS_LABEL
 async def send_reminder() -> None:
     ...
 ```

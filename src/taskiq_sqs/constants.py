@@ -10,5 +10,5 @@ MAX_DELAY_SECONDS: Final[int] = 900
 SQS_MAX_MESSAGE_SIZE_BYTES: Final[int] = 262_144
 DEFAULT_S3_OFFLOAD_THRESHOLD_BYTES: Final[int] = 200_000
 
-SQS_QUEUE_LABEL: Final[str] = "sqs_queue"
-SQS_DELAY_SECONDS_LABEL: Final[str] = "sqs_delay_seconds"
+SQS_QUEUE_LABEL: Final[str] = "queue_name"
+SQS_DELAY_SECONDS_LABEL: Final[str] = "delay"
