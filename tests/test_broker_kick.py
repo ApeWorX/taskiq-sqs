@@ -1,3 +1,5 @@
+import asyncio
+
 import capo_sqs
 import pytest
 from taskiq import BrokerMessage
@@ -5,8 +7,8 @@ from taskiq import BrokerMessage
 from tests.conftest import _queue_name_from_url
 
 from taskiq_sqs import SQSBroker
-from taskiq_sqs.broker import SQS_QUEUE_LABEL
-from taskiq_sqs.exceptions import BrokerInitError, UnknownQueueError
+from taskiq_sqs.constants import SQS_DELAY_SECONDS_LABEL, SQS_QUEUE_LABEL
+from taskiq_sqs.exceptions import BrokerInitError, InvalidDelaySecondsError, UnknownQueueError
 
 
 async def test_when_kick_called__than_message_should_be_published_to_queue(
@@ -66,3 +68,34 @@ async def test_when_kick_called_with_unknown_queue_label__then_should_raise_an_e
 
     with pytest.raises(UnknownQueueError):
         await multiqueue_sqs_broker.kick(broker_message)
+
+
+async def test_when_kick_called_with_delay_label__then_message_is_delayed(
+    sqs_broker: SQSBroker,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+    broker_message: BrokerMessage,
+) -> None:
+    broker_message.labels[SQS_DELAY_SECONDS_LABEL] = 1
+
+    await sqs_broker.kick(broker_message)
+
+    immediate = await sqs_client.receive_message(queue_url=sqs_queue)
+    assert not immediate.get("messages")
+
+    await asyncio.sleep(1.2)
+
+    delayed = await sqs_client.receive_message(queue_url=sqs_queue)
+    assert len(delayed.get("messages", [])) == 1
+
+
+@pytest.mark.parametrize("delay_seconds", [-1, 901, "10", 10.5, True])
+async def test_when_kick_called_with_invalid_delay_label__then_should_raise_an_error(
+    sqs_broker: SQSBroker,
+    broker_message: BrokerMessage,
+    delay_seconds: object,
+) -> None:
+    broker_message.labels[SQS_DELAY_SECONDS_LABEL] = delay_seconds
+
+    with pytest.raises(InvalidDelaySecondsError):
+        await sqs_broker.kick(broker_message)
