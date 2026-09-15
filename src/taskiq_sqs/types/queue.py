@@ -1,4 +1,5 @@
-from typing import NotRequired, TypedDict
+from collections.abc import Mapping
+from typing import Any, NotRequired, TypedDict
 
 from taskiq_sqs import constants
 from taskiq_sqs.exceptions import BrokerInitError
@@ -16,6 +17,8 @@ class SQSQueue(TypedDict):
         is_batching_enabled: Whether to buffer kicked messages in memory and flush them via batch send.
         batch_size: Maximum messages per batch (1-10). Defaults to 10.
         batch_timeout: Maximum seconds to wait for a batch to fill up before flushing it anyway. Defaults to 1.0.
+        is_declare: Whether to create the queue on startup if it doesn't exist yet. Defaults to True.
+        options: Queue attributes  passed during queue creation when the queue declaration is enabled.
     """
 
     name: str
@@ -25,6 +28,8 @@ class SQSQueue(TypedDict):
     is_batching_enabled: NotRequired[bool]
     batch_size: NotRequired[int]
     batch_timeout: NotRequired[float]
+    is_declare: NotRequired[bool]
+    options: NotRequired[Mapping[str, Any]]
 
 
 def validate_queue(queue: SQSQueue) -> None:

@@ -11,7 +11,12 @@ from taskiq.acks import AckableMessage
 from taskiq.message import BrokerMessage
 
 from taskiq_sqs import constants
-from taskiq_sqs.exceptions import BrokerInitError, FifoDelayNotSupportedError, UnknownQueueError
+from taskiq_sqs.exceptions import (
+    BrokerInitError,
+    FifoDelayNotSupportedError,
+    QueueNotFoundError,
+    UnknownQueueError,
+)
 from taskiq_sqs.types.message import (
     is_label_true,
     validate_delay_seconds,
@@ -107,7 +112,7 @@ class SQSBroker(AsyncBroker):
         await self._sqs_client.__aenter__()
         try:
             for queue in self._queues:
-                queue_url = await self._get_queue_url(queue["name"])
+                queue_url = await self._get_queue_url(queue)
                 logger.info("Resolved queue '%s' URL: %s", queue["name"], queue_url)
                 if queue.get("is_batching_enabled", False):
                     self._batch_queues[queue["name"]] = asyncio.Queue()
@@ -130,12 +135,29 @@ class SQSBroker(AsyncBroker):
         await self._sqs_client.__aexit__(None, None, None)
         await super().shutdown()
 
-    async def _get_queue_url(self, queue_name: str) -> str:
-        if queue_name not in self._queue_urls:
-            with self._handle_exceptions(queue_name):
-                result = await self._sqs_client.get_queue_url(queue_name=queue_name)
-            self._queue_urls[queue_name] = result["queue_url"]
-        return self._queue_urls[queue_name]
+    async def _get_queue_url(self, queue: SQSQueue) -> str:
+        name = queue["name"]
+        if name not in self._queue_urls:
+            result: Any
+            try:
+                result = await self._sqs_client.get_queue_url(queue_name=name)
+            except capo_sqs.errors.QueueDoesNotExist as exc:
+                if not queue.get("is_declare", True):
+                    raise QueueNotFoundError(queue_name=name) from exc
+                result = await self._create_queue(queue)
+            except capo_sqs.errors.ServiceError as exc:
+                raise BrokerInitError(details=exc.code or "") from exc
+            self._queue_urls[name] = result["queue_url"]
+        return self._queue_urls[name]
+
+    async def _create_queue(self, queue: SQSQueue) -> Any:
+        attributes: dict[Any, Any] = dict(queue.get("options", {}))
+        if queue.get("is_fifo", queue["name"].endswith(".fifo")):
+            attributes.setdefault("FifoQueue", "true")
+        try:
+            return await self._sqs_client.create_queue(queue_name=queue["name"], attributes=attributes or None)
+        except capo_sqs.errors.ServiceError as exc:
+            raise BrokerInitError(details=exc.code or "") from exc
 
     async def _build_kick_kwargs(
         self,
@@ -182,7 +204,7 @@ class SQSBroker(AsyncBroker):
     async def kick(self, message: BrokerMessage) -> None:
         """Kick tasks out from current program to configured SQS queue."""
         queue = self._resolve_queue(message.labels.get(constants.SQS_QUEUE_LABEL))
-        queue_url = await self._get_queue_url(queue["name"])
+        queue_url = await self._get_queue_url(queue)
         kwargs = await self._build_kick_kwargs(message, queue, queue_url)
         if self._should_batch(queue, message):
             await self._batch_queues[queue["name"]].put(kwargs)
@@ -216,7 +238,7 @@ class SQSBroker(AsyncBroker):
             )
 
     async def _send_batch(self, queue: SQSQueue, batch: list[dict[str, Any]]) -> None:
-        queue_url = await self._get_queue_url(queue["name"])
+        queue_url = await self._get_queue_url(queue)
         if not queue.get("is_fifo", queue["name"].endswith(".fifo")):
             await self._send_batch_to_sqs(queue, queue_url, batch)
             return
@@ -292,7 +314,7 @@ class SQSBroker(AsyncBroker):
     async def _poll_queue(self, queue: SQSQueue, incoming: "asyncio.Queue[_QueueItem]") -> None:
         """Continuously receive messages from a single queue and forward them to the shared incoming queue."""
         try:
-            queue_url = await self._get_queue_url(queue["name"])
+            queue_url = await self._get_queue_url(queue)
             while True:
                 with self._handle_exceptions(queue["name"]):
                     results = await self._sqs_client.receive_message(

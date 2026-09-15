@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from typing import Any
 
 import capo_sqs
@@ -46,7 +47,7 @@ async def test_when_during_kick_queue_not_found__then_should_raise_an_error(
     sqs_broker: SQSBroker,
     broker_message: BrokerMessage,
 ) -> None:
-    sqs_broker._queue_urls[sqs_broker._default_queue_name] = "nonexistent-queue"
+    sqs_broker._queue_urls[sqs_broker._default_queue_name] = f"not-a-real-queue-url-{uuid.uuid4().hex}"
     with pytest.raises(BrokerInitError):
         await sqs_broker.kick(broker_message)
 

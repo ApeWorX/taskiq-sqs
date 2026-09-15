@@ -1,4 +1,5 @@
-from typing import NotRequired, TypedDict
+from collections.abc import Mapping
+from typing import Any, NotRequired, TypedDict
 
 
 class S3Bucket(TypedDict):
@@ -7,8 +8,10 @@ class S3Bucket(TypedDict):
 
     Attributes:
         name: The name of the bucket.
-        declare: Whether to create the bucket on startup if it not exists yet. Defaults to True.
+        is_declare: Whether to create the bucket on startup if it not exists yet. Defaults to True.
+        options: Extra keyword arguments merged into the create bucket call when the bucket is declared.
     """
 
     name: str
-    declare: NotRequired[bool]
+    is_declare: NotRequired[bool]
+    options: NotRequired[Mapping[str, Any]]

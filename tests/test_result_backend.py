@@ -144,7 +144,7 @@ class TestBucketDeclare:
         s3_client: capo_s3.AsyncS3Client,
     ) -> None:
         self.backend = S3ResultBackend(
-            bucket=S3Bucket(name=self.tmp_bucket_name, declare=True),
+            bucket=S3Bucket(name=self.tmp_bucket_name, is_declare=True),
             **aws_credentials,
         )
         await self.backend.startup()
@@ -157,7 +157,7 @@ class TestBucketDeclare:
         s3_client: capo_s3.AsyncS3Client,
     ) -> None:
         backend = S3ResultBackend(
-            bucket=S3Bucket(name=self.tmp_bucket_name, declare=False),
+            bucket=S3Bucket(name=self.tmp_bucket_name, is_declare=False),
             **aws_credentials,
         )
 
@@ -173,7 +173,7 @@ class TestBucketDeclare:
         s3_bucket: str,
     ) -> None:
         self.backend = S3ResultBackend(
-            bucket=S3Bucket(name=s3_bucket, declare=False),
+            bucket=S3Bucket(name=s3_bucket, is_declare=False),
             **aws_credentials,
         )
         await self.backend.startup()
@@ -187,7 +187,7 @@ class TestBucketDeclare:
         s3_bucket: str,
     ) -> None:
         self.backend = S3ResultBackend(
-            bucket=S3Bucket(name=s3_bucket, declare=True),
+            bucket=S3Bucket(name=s3_bucket, is_declare=True),
             **aws_credentials,
         )
         await self.backend.startup()
