@@ -29,7 +29,7 @@ class ResultBackendError(BaseTaskiqSQSError):
 class BucketNotFoundError(BaseTaskiqSQSError):
     """Error if bucket not found."""
 
-    __template__ = "Bucket '{bucket_name}' not found during initialization and declare=False"
+    __template__ = "Bucket '{bucket_name}' not found during initialization and is_declare=False"
     bucket_name: str
 
 
@@ -53,6 +53,13 @@ class UnknownQueueError(BaseTaskiqSQSError):
     """Error if a message references a queue that isn't configured on the broker."""
 
     __template__ = "Message references queue '{queue_name}' which is not configured on this broker"
+    queue_name: str
+
+
+class QueueNotFoundError(BaseTaskiqSQSError):
+    """Error if a queue doesn't exist and is_declare=False."""
+
+    __template__ = "Queue '{queue_name}' not found during initialization and is_declare=False"
     queue_name: str
 
 

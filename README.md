@@ -22,7 +22,7 @@ from taskiq_sqs import S3ResultBackend, SQSBroker
 from taskiq_sqs.types import S3Bucket, SQSQueue
 
 broker = SQSBroker(
-    queues=SQSQueue(name="my-queue"),  # specify an existing queue
+    queues=SQSQueue(name="my-queue"),  # by default the broker creates the queue for you if it doesn't exist
     endpoint_url="http://localhost:4566",
     aws_region_name="us-east-1",
 ).with_result_backend(
@@ -71,6 +71,23 @@ async def urgent_task() -> None:
 ```
 
 A worker started against this broker consumes from every configured queue at once. Passing a queue name through the `queue_name` label that isn't configured on the broker raises `UnknownQueueError`.
+
+## Declaring queues
+
+By default the broker creates a queue on startup if it doesn't exist yet, the same way `S3Bucket` does for buckets. Set `is_declare=False` to require the queue to already exist instead (raises `QueueNotFoundError` if it doesn't). `options` are queue attributes (e.g. `VisibilityTimeout`, `MessageRetentionPeriod`) passed to `CreateQueue`, in AWS's own PascalCase naming, when the queue is declared — they have no effect on a queue that already exists:
+
+```python
+from taskiq_sqs import SQSBroker
+from taskiq_sqs.types import SQSQueue
+
+broker = SQSBroker(
+    queues=SQSQueue(name="my-queue", options={"VisibilityTimeout": "60", "MessageRetentionPeriod": "86400"}),
+)
+```
+
+FIFO queues get their `FifoQueue` attribute set automatically when declared — no need to include it in `options`.
+
+`S3Bucket` has the same `options` field, for parameters `CreateBucket` accepts beyond `name` (e.g. `acl`), passed through whenever `S3ResultBackend`/`S3OffloadMiddleware` create the bucket.
 
 ## Delayed tasks
 
@@ -127,6 +144,19 @@ await process_event.kicker().with_labels(expiry=time.time() + 300).kiq()  # disc
 ```
 
 Expiration is checked by the worker on receipt, not by SQS itself — a message can still sit in the queue past its expiry (e.g. while workers are busy or scaled to zero), it just won't run once picked up. `expiry` must be a non-negative number; anything else raises `InvalidExpiryError` when the task is kicked.
+
+## Message batching
+
+Set `is_batching_enabled` on a queue to buffer kicked messages in memory and flush them together via `SendMessageBatch` (up to `batch_size` messages, or after `batch_timeout` seconds, whichever comes first) instead of sending each one immediately:
+
+```python
+from taskiq_sqs import SQSBroker
+from taskiq_sqs.types import SQSQueue
+
+broker = SQSBroker(
+    queues=SQSQueue(name="my-queue", is_batching_enabled=True, batch_size=10, batch_timeout=1.0),
+)
+```
 
 ## Offloading large messages to S3
 

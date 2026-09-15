@@ -125,7 +125,7 @@ class TestS3OffloadMiddleware:
         aws_credentials: AWSCredentials,
     ) -> None:
         middleware = S3OffloadMiddleware(
-            bucket=S3Bucket(name="nonexistent-offload-bucket", declare=False),
+            bucket=S3Bucket(name="nonexistent-offload-bucket", is_declare=False),
             **aws_credentials,
         )
         with pytest.raises(BucketNotFoundError):

@@ -1,10 +1,12 @@
 import asyncio
+import uuid
+from typing import Any
 
 import capo_sqs
 import pytest
 from taskiq import BrokerMessage
 
-from tests.conftest import _queue_name_from_url
+from tests.conftest import AWSCredentials, _queue_name_from_url
 
 from taskiq_sqs import SQSBroker
 from taskiq_sqs.constants import (
@@ -13,6 +15,7 @@ from taskiq_sqs.constants import (
     SQS_MESSAGE_DEDUPLICATION_ID_LABEL,
     SQS_MESSAGE_GROUP_ID_LABEL,
     SQS_QUEUE_LABEL,
+    SQS_SKIP_BATCHING_LABEL,
 )
 from taskiq_sqs.exceptions import (
     BrokerInitError,
@@ -23,6 +26,7 @@ from taskiq_sqs.exceptions import (
     InvalidMessageGroupIdError,
     UnknownQueueError,
 )
+from taskiq_sqs.types import SQSQueue
 
 
 async def test_when_kick_called__than_message_should_be_published_to_queue(
@@ -43,7 +47,7 @@ async def test_when_during_kick_queue_not_found__then_should_raise_an_error(
     sqs_broker: SQSBroker,
     broker_message: BrokerMessage,
 ) -> None:
-    sqs_broker._queue_urls[sqs_broker._default_queue_name] = "nonexistent-queue"
+    sqs_broker._queue_urls[sqs_broker._default_queue_name] = f"not-a-real-queue-url-{uuid.uuid4().hex}"
     with pytest.raises(BrokerInitError):
         await sqs_broker.kick(broker_message)
 
@@ -311,3 +315,135 @@ async def test_when_kick_called_with_stringified_expiry_label__then_it_is_accept
     assert len(messages) == 1
     attribute = messages[0].get("message_attributes", {}).get(SQS_EXPIRY_LABEL, {})
     assert attribute.get("string_value") == "1789505020.5"
+
+
+async def test_when_batching_enabled_and_timeout_elapses__then_batch_is_flushed(
+    aws_credentials: AWSCredentials,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+) -> None:
+    broker = SQSBroker(
+        queues=SQSQueue(name=_queue_name_from_url(sqs_queue), is_batching_enabled=True, batch_timeout=0.2),
+        **aws_credentials,
+    )
+    await broker.startup()
+    try:
+        message = BrokerMessage(task_id="t1", task_name="t1", message=b"one", labels={})
+        await broker.kick(message)
+
+        immediate = await sqs_client.receive_message(queue_url=sqs_queue)
+        assert not immediate.get("messages")
+
+        await asyncio.sleep(0.4)
+
+        flushed = await sqs_client.receive_message(queue_url=sqs_queue)
+        assert len(flushed.get("messages", [])) == 1
+    finally:
+        await broker.shutdown()
+
+
+async def test_when_batch_size_reached__then_batch_flushes_without_waiting_for_timeout(
+    aws_credentials: AWSCredentials,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+) -> None:
+    broker = SQSBroker(
+        queues=SQSQueue(
+            name=_queue_name_from_url(sqs_queue),
+            is_batching_enabled=True,
+            batch_size=2,
+            batch_timeout=30,
+        ),
+        **aws_credentials,
+    )
+    await broker.startup()
+    try:
+        await broker.kick(BrokerMessage(task_id="t1", task_name="t1", message=b"one", labels={}))
+        await broker.kick(BrokerMessage(task_id="t2", task_name="t2", message=b"two", labels={}))
+
+        # batch_size reached, so this must flush well before the 30s batch_timeout
+        flushed: dict[str, Any] = {}
+        for _ in range(20):
+            flushed = await sqs_client.receive_message(queue_url=sqs_queue, max_number_of_messages=2)
+            if len(flushed.get("messages", [])) == 2:
+                break
+            await asyncio.sleep(0.1)
+        assert len(flushed.get("messages", [])) == 2
+    finally:
+        await broker.shutdown()
+
+
+async def test_when_skip_batching_label_set__then_message_is_sent_immediately(
+    aws_credentials: AWSCredentials,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+) -> None:
+    broker = SQSBroker(
+        queues=SQSQueue(name=_queue_name_from_url(sqs_queue), is_batching_enabled=True, batch_timeout=30),
+        **aws_credentials,
+    )
+    await broker.startup()
+    try:
+        message = BrokerMessage(
+            task_id="t1",
+            task_name="t1",
+            message=b"urgent",
+            labels={SQS_SKIP_BATCHING_LABEL: True},
+        )
+        await broker.kick(message)
+
+        # must be visible well before the 30s batch_timeout
+        immediate = await sqs_client.receive_message(queue_url=sqs_queue)
+        assert len(immediate.get("messages", [])) == 1
+    finally:
+        await broker.shutdown()
+
+
+async def test_when_delay_label_set_on_batching_queue__then_message_bypasses_batching(
+    aws_credentials: AWSCredentials,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+) -> None:
+    broker = SQSBroker(
+        queues=SQSQueue(name=_queue_name_from_url(sqs_queue), is_batching_enabled=True, batch_timeout=30),
+        **aws_credentials,
+    )
+    await broker.startup()
+    try:
+        message = BrokerMessage(
+            task_id="t1",
+            task_name="t1",
+            message=b"delayed",
+            labels={SQS_DELAY_SECONDS_LABEL: 1},
+        )
+        await broker.kick(message)
+
+        immediate = await sqs_client.receive_message(queue_url=sqs_queue)
+        assert not immediate.get("messages")
+
+        # governed by the 1s delay, not the 30s batch_timeout
+        await asyncio.sleep(1.2)
+        delayed = await sqs_client.receive_message(queue_url=sqs_queue)
+        assert len(delayed.get("messages", [])) == 1
+    finally:
+        await broker.shutdown()
+
+
+async def test_when_broker_shuts_down_with_pending_batch__then_it_is_flushed(
+    aws_credentials: AWSCredentials,
+    sqs_client: capo_sqs.AsyncSQSClient,
+    sqs_queue: str,
+) -> None:
+    broker = SQSBroker(
+        queues=SQSQueue(name=_queue_name_from_url(sqs_queue), is_batching_enabled=True, batch_timeout=30),
+        **aws_credentials,
+    )
+    await broker.startup()
+
+    message = BrokerMessage(task_id="t1", task_name="t1", message=b"pending", labels={})
+    await broker.kick(message)
+
+    await broker.shutdown()  # must flush the pending batch, not just drop it
+
+    response = await sqs_client.receive_message(queue_url=sqs_queue)
+    assert len(response.get("messages", [])) == 1

@@ -73,14 +73,14 @@ class S3ResultBackend(AsyncResultBackend[_ReturnType]):
         try:
             await self._s3_client.head_bucket(bucket=self._bucket["name"])
         except capo_s3.errors.NotFound:
-            if not self._bucket.get("declare", True):
+            if not self._bucket.get("is_declare", True):
                 raise exceptions.BucketNotFoundError(bucket_name=self._bucket["name"]) from None
             await self._create_bucket()
         except capo_s3.errors.ServiceError as exc:
             raise exceptions.ResultBackendError(code=exc.code) from exc
 
     async def _create_bucket(self) -> None:
-        create_kwargs: dict[str, Any] = {}
+        create_kwargs: dict[str, Any] = dict(self._bucket.get("options", {}))
         if self._aws_region and self._aws_region != constants.AWS_DEFAULT_REGION:
             create_kwargs["create_bucket_configuration"] = {"location_constraint": self._aws_region}
         with contextlib.suppress(capo_s3.errors.BucketAlreadyOwnedByYou):

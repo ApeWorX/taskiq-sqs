@@ -1,4 +1,5 @@
-from typing import NotRequired, TypedDict
+from collections.abc import Mapping
+from typing import Any, NotRequired, TypedDict
 
 from taskiq_sqs import constants
 from taskiq_sqs.exceptions import BrokerInitError
@@ -13,12 +14,22 @@ class SQSQueue(TypedDict):
         max_number_of_messages: Maximum messages to retrieve per poll (1-10). Defaults to 1.
         wait_time_seconds: Long polling wait time in seconds (0-20). Defaults to 0.
         is_fifo: Whether this is a FIFO queue.
+        is_batching_enabled: Whether to buffer kicked messages in memory and flush them via batch send.
+        batch_size: Maximum messages per batch (1-10). Defaults to 10.
+        batch_timeout: Maximum seconds to wait for a batch to fill up before flushing it anyway. Defaults to 1.0.
+        is_declare: Whether to create the queue on startup if it doesn't exist yet. Defaults to True.
+        options: Queue attributes  passed during queue creation when the queue declaration is enabled.
     """
 
     name: str
     max_number_of_messages: NotRequired[int]
     wait_time_seconds: NotRequired[int]
     is_fifo: NotRequired[bool]
+    is_batching_enabled: NotRequired[bool]
+    batch_size: NotRequired[int]
+    batch_timeout: NotRequired[float]
+    is_declare: NotRequired[bool]
+    options: NotRequired[Mapping[str, Any]]
 
 
 def validate_queue(queue: SQSQueue) -> None:
@@ -39,3 +50,11 @@ def validate_queue(queue: SQSQueue) -> None:
             details=f"Queue '{queue['name']}' has is_fifo={queue['is_fifo']}, but SQS requires FIFO queue "
             "names to end in '.fifo' and standard queue names not to",
         )
+    batch_size = queue.get("batch_size", constants.DEFAULT_BATCH_SIZE)
+    if batch_size > constants.MAX_BATCH_SIZE or batch_size < 1:
+        raise BrokerInitError(
+            details=f"BatchSize for queue '{queue['name']}' can be no greater than 10 or less than 1",
+        )
+    batch_timeout = queue.get("batch_timeout", constants.DEFAULT_BATCH_TIMEOUT)
+    if batch_timeout <= 0:
+        raise BrokerInitError(details=f"BatchTimeout for queue '{queue['name']}' must be greater than 0")
